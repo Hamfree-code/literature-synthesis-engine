@@ -1,0 +1,18 @@
+Two scientific claims about {topic_title}. Evaluate whether they contradict each other.
+Return ONLY valid JSON. No preamble.
+
+{
+  "contradictory": boolean,
+  "contradiction_type": "direct" | "population_difference" | "definition_difference" | "measurement_difference" | "not_contradictory",
+  "explanation": string,
+  "likely_resolution": string,
+  "confidence": float,
+  "provenance_a": { "quote": string, "paper_id": string },
+  "provenance_b": { "quote": string, "paper_id": string }
+}
+
+CLAIM A (paper_id: {paper_a_id}):
+{claim_a}
+
+CLAIM B (paper_id: {paper_b_id}):
+{claim_b}

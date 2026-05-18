@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Hams & Co. Research Division — Literature Synthesis Engine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=DM+Sans:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #080808;
+    --panel: #111;
+    --panel-2: #1a1a1a;
+    --gold: #C9A84C;
+    --gold-soft: #e8c97a;
+    --green: #2D6A4F;
+    --green-bright: #52e07a;
+    --text: #f0f0f0;
+    --muted: #888;
+    --border: #333;
+    --error: #e05252;
+    --warn: #d99a3a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 15px;
+    line-height: 1.55;
+    min-height: 100vh;
+  }
+  body {
+    background:
+      radial-gradient(circle at 100% 0%, rgba(201,168,76,0.06), transparent 50%),
+      radial-gradient(circle at 0% 100%, rgba(45,106,79,0.04), transparent 40%),
+      var(--bg);
+    padding: 40px 24px 80px;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; }
+
+  /* HEADER */
+  header { text-align: center; margin-bottom: 40px; }
+  .brand {
+    font-family: 'Playfair Display', serif;
+    font-size: 54px;
+    font-weight: 900;
+    color: var(--gold);
+    letter-spacing: 1px;
+    line-height: 1.1;
+  }
+  .brand .clover { color: var(--green); margin: 0 18px; font-size: 0.55em; vertical-align: middle; }
+  .division {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 11px;
+    letter-spacing: 6px;
+    color: #c0c0c0;
+    text-transform: uppercase;
+    margin-top: 8px;
+  }
+  .header-sep {
+    width: 220px; height: 1px;
+    background: linear-gradient(to right, transparent, var(--gold), transparent);
+    margin: 22px auto 8px;
+  }
+  .tagline {
+    font-family: 'Playfair Display', serif;
+    font-style: italic;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  /* PANEL */
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 28px 32px;
+    margin-bottom: 22px;
+  }
+  .panel-title {
+    font-size: 11px;
+    letter-spacing: 3px;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 16px;
+  }
+
+  /* INPUTS */
+  .form-row { margin-bottom: 18px; }
+  label {
+    display: block;
+    font-size: 10px;
+    letter-spacing: 2.5px;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  input[type="text"], input[type="number"] {
+    width: 100%;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 15px;
+    padding: 12px 14px;
+    border-radius: 3px;
+    transition: border-color .2s, background .2s;
+  }
+  input[type="text"]:focus, input[type="number"]:focus {
+    outline: none;
+    border-color: var(--gold);
+    background: #161616;
+  }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+
+  /* COST */
+  .cost-line {
+    display: flex; align-items: center; justify-content: space-between;
+    background: var(--panel-2);
+    border-left: 2px solid var(--gold);
+    padding: 14px 18px;
+    margin: 20px 0 6px;
+    border-radius: 2px;
+  }
+  .cost-label { font-size: 10px; letter-spacing: 2.5px; color: var(--muted); text-transform: uppercase; }
+  .cost-value { font-family: 'Playfair Display', serif; font-size: 22px; color: var(--gold); font-weight: 700; }
+  .cost-detail { font-size: 12px; color: var(--muted); margin-top: 6px; }
+
+  /* PRIMARY BUTTON */
+  .primary-btn {
+    width: 100%;
+    background: var(--gold);
+    color: #000;
+    border: none;
+    padding: 18px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    cursor: pointer;
+    border-radius: 3px;
+    margin-top: 18px;
+    transition: filter .2s, background .2s;
+  }
+  .primary-btn:hover { filter: brightness(1.15); }
+  .primary-btn:disabled {
+    background: #4a3f1d;
+    color: #888;
+    cursor: not-allowed;
+    filter: none;
+  }
+  .primary-btn.running { background: #6b5a28; color: var(--gold-soft); animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse {
+    0%, 100% { background: #6b5a28; }
+    50% { background: #8a772f; }
+  }
+
+  /* PHASES */
+  .phases { margin-top: 6px; }
+  .phase {
+    display: grid;
+    grid-template-columns: 32px 1fr auto;
+    gap: 14px;
+    align-items: center;
+    padding: 10px 0;
+    position: relative;
+  }
+  .phase + .phase::before {
+    content: "";
+    position: absolute;
+    left: 15px;
+    top: -10px;
+    width: 1px;
+    height: 20px;
+    background: var(--border);
+  }
+  .phase .dot {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: transparent;
+    border: 1.5px solid var(--border);
+    margin-left: 8px;
+  }
+  .phase.active .dot { background: var(--gold); border-color: var(--gold); box-shadow: 0 0 12px var(--gold); }
+  .phase.done .dot { background: var(--green-bright); border-color: var(--green-bright); box-shadow: none; }
+  .phase.done .dot::after { content: "✓"; color: #000; font-size: 10px; font-weight: 900; display: block; text-align: center; line-height: 12px; margin-top: -1px; }
+  .phase .label { color: var(--muted); font-size: 13px; }
+  .phase.active .label { color: var(--text); }
+  .phase.done .label { color: var(--green-bright); }
+  .phase .badge { font-size: 10px; letter-spacing: 2px; color: var(--muted); text-transform: uppercase; }
+  .phase.active .badge { color: var(--gold); }
+  .phase.done .badge { color: var(--green-bright); }
+
+  /* LOG */
+  .log-wrap { background: #0a0a0a; border: 1px solid var(--border); border-radius: 3px; margin-top: 16px; }
+  .log {
+    height: 200px;
+    overflow-y: auto;
+    padding: 14px 16px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--muted);
+  }
+  .log .ln { padding: 1px 0; }
+  .log .ln.success { color: var(--green-bright); }
+  .log .ln.error { color: var(--error); }
+  .log .ln.warn { color: var(--warn); }
+  .log .ln .ts { color: #555; margin-right: 8px; }
+  .log::-webkit-scrollbar { width: 6px; }
+  .log::-webkit-scrollbar-track { background: transparent; }
+  .log::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 3px; }
+
+  /* FOOTER */
+  .footer-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 18px;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .spend-display {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
+    color: var(--text);
+  }
+  .spend-display .val { color: var(--gold); font-weight: 500; }
+  .spend-display.warn .val { color: var(--warn); }
+  .spend-display.danger .val { color: var(--error); }
+  .secondary-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 10px 18px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    cursor: pointer;
+    border-radius: 3px;
+    transition: all .2s;
+  }
+  .secondary-btn:hover { border-color: #666; color: var(--text); }
+  .secondary-btn.cancel { border-color: #5a2c2c; color: #c97070; }
+  .secondary-btn.cancel:hover { background: #2a1010; color: var(--error); border-color: var(--error); }
+  .secondary-btn.open-report { border-color: var(--green-bright); color: var(--green-bright); }
+  .secondary-btn.open-report:hover { background: rgba(82,224,122,0.08); }
+  .secondary-btn[disabled] { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
+
+  .credit {
+    margin-top: 36px; text-align: center;
+    font-size: 10px; letter-spacing: 2px; color: #444; text-transform: uppercase;
+  }
+
+  /* MODAL */
+  .modal-bg {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
+    display: none; align-items: center; justify-content: center;
+    z-index: 100;
+  }
+  .modal-bg.open { display: flex; }
+  .modal {
+    background: var(--panel); border: 1px solid var(--gold);
+    padding: 32px; border-radius: 4px;
+    max-width: 460px; width: 90%;
+  }
+  .modal h2 { font-family: 'Playfair Display', serif; color: var(--gold); margin-bottom: 14px; font-size: 22px; }
+  .modal p { color: var(--text); margin-bottom: 22px; }
+  .modal-actions { display: flex; gap: 12px; justify-content: flex-end; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="brand"><span class="clover">🍀</span>HAMS & CO.<span class="clover">🍀</span></div>
+    <div class="division">Research Division</div>
+    <div class="header-sep"></div>
+    <div class="tagline">Literature Synthesis Engine</div>
+  </header>
+
+  <div class="panel">
+    <div class="panel-title">Research Parameters</div>
+
+    <div class="form-row">
+      <label for="topic">Research topic</label>
+      <input type="text" id="topic" value="long covid" autocomplete="off">
+    </div>
+
+    <div class="form-row">
+      <label for="mesh_terms">MeSH terms (optional) — refines PubMed search</label>
+      <input type="text" id="mesh_terms" placeholder='e.g. "Post-Acute COVID-19 Syndrome"[MeSH] OR "COVID-19"[MeSH]' autocomplete="off">
+      <div style="font-size: 10px; color: var(--muted); margin-top: 6px; letter-spacing: 0.5px;">Leave blank for free-text search only. MeSH terms are AND-joined with the topic to filter precisely.</div>
+    </div>
+
+    <div class="grid-2">
+      <div class="form-row">
+        <label for="max_papers">Max papers to triage</label>
+        <input type="number" id="max_papers" value="500" min="50" max="5000" step="50">
+      </div>
+      <div class="form-row">
+        <label for="max_deep">Max deep analyses</label>
+        <input type="number" id="max_deep" value="50" min="5" max="500" step="5">
+      </div>
+    </div>
+
+    <div class="cost-line">
+      <div>
+        <div class="cost-label">Estimated cost</div>
+        <div class="cost-detail" id="cost_detail">500 papers triaged · 50 deep analyses</div>
+      </div>
+      <div class="cost-value" id="cost_value">$8.50</div>
+    </div>
+
+    <button class="primary-btn" id="start_btn" onclick="initiate()">Initiate Analysis</button>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Analysis Progress</div>
+    <div class="phases" id="phases">
+      <!-- populated by JS -->
+    </div>
+
+    <div class="log-wrap">
+      <div class="log" id="log"><div class="ln">&gt; Awaiting initiation...</div></div>
+    </div>
+
+    <div class="footer-row">
+      <div class="spend-display" id="spend_display">API spend: <span class="val">$0.00</span></div>
+      <div style="display:flex; gap:10px;">
+        <button class="secondary-btn cancel" id="cancel_btn" disabled onclick="cancelRun()">Cancel</button>
+        <button class="secondary-btn open-report" id="report_btn" disabled onclick="openReport()">Open Report 📄</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="credit">© Hams & Co. — Research Division · Uses Private Research Infrastructure</div>
+</div>
+
+<div class="modal-bg" id="modal_bg">
+  <div class="modal">
+    <h2>High-cost analysis</h2>
+    <p id="modal_text">This run is estimated to cost <strong id="modal_cost">$0.00</strong>. Do you want to continue?</p>
+    <div class="modal-actions">
+      <button class="secondary-btn" onclick="closeModal()">Cancel</button>
+      <button class="primary-btn" style="width:auto; padding:12px 24px; margin:0;" onclick="confirmStart()">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const COST_TRIAGE = 0.003;
+const COST_DEEP = 0.15;
+
+const PHASES = [
+  {key:"ingest",   label:"Phase 1 — Ingestion"},
+  {key:"triage",   label:"Phase 2 — Triage (Haiku)"},
+  {key:"enrich",   label:"Phase 3 — Full-text fetch"},
+  {key:"deep",     label:"Phase 4 — Deep extraction (Sonnet)"},
+  {key:"store",    label:"Phase 5 — Storage"},
+  {key:"analyze",  label:"Phase 6 — Cross-analysis"},
+  {key:"report",   label:"Phase 7 — Report generation"},
+];
+
+let evtSource = null;
+let pendingParams = null;
+
+function renderPhases() {
+  const root = document.getElementById("phases");
+  root.innerHTML = PHASES.map((p, i) => `
+    <div class="phase" id="phase_${p.key}" data-index="${i}">
+      <div class="dot"></div>
+      <div class="label">${p.label}</div>
+      <div class="badge"></div>
+    </div>
+  `).join("");
+}
+renderPhases();
+
+function updateCost() {
+  const mp = parseInt(document.getElementById("max_papers").value) || 0;
+  const md = parseInt(document.getElementById("max_deep").value) || 0;
+  const cost = mp * COST_TRIAGE + md * COST_DEEP;
+  document.getElementById("cost_value").textContent = "$" + cost.toFixed(2);
+  document.getElementById("cost_detail").textContent =
+    `${mp.toLocaleString()} papers triaged · ${md} deep analyses`;
+}
+["topic","max_papers","max_deep"].forEach(id => {
+  document.getElementById(id).addEventListener("input", updateCost);
+});
+updateCost();
+
+function logLine(msg, level="info") {
+  const log = document.getElementById("log");
+  const div = document.createElement("div");
+  div.className = "ln " + (level || "info");
+  const ts = new Date().toLocaleTimeString();
+  div.innerHTML = `<span class="ts">${ts}</span>${msg.replace(/</g,"&lt;")}`;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+function setSpend(amount) {
+  const sd = document.getElementById("spend_display");
+  sd.innerHTML = `API spend: <span class="val">$${amount.toFixed(2)}</span>`;
+  sd.classList.remove("warn", "danger");
+  if (amount > 20) sd.classList.add("danger");
+  else if (amount > 5) sd.classList.add("warn");
+}
+
+function markPhase(key, state) {
+  const el = document.getElementById("phase_" + key);
+  if (!el) return;
+  el.classList.remove("active", "done");
+  el.querySelector(".badge").textContent = "";
+  if (state === "active") { el.classList.add("active"); el.querySelector(".badge").textContent = "RUNNING"; }
+  else if (state === "done") { el.classList.add("done"); el.querySelector(".badge").textContent = "DONE"; }
+}
+
+function initiate() {
+  const topic = document.getElementById("topic").value.trim() || "long covid";
+  const mesh_terms = document.getElementById("mesh_terms").value.trim();
+  const max_papers = parseInt(document.getElementById("max_papers").value) || 500;
+  const max_deep = parseInt(document.getElementById("max_deep").value) || 50;
+  const cost = max_papers * COST_TRIAGE + max_deep * COST_DEEP;
+  pendingParams = { topic, mesh_terms, max_papers, max_deep };
+  if (max_deep > 100) {
+    document.getElementById("modal_cost").textContent = "$" + cost.toFixed(2);
+    document.getElementById("modal_bg").classList.add("open");
+    return;
+  }
+  doStart();
+}
+
+function closeModal() { document.getElementById("modal_bg").classList.remove("open"); }
+function confirmStart() { closeModal(); doStart(); }
+
+async function doStart() {
+  if (!pendingParams) return;
+  try {
+    const r = await fetch("/start", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify(pendingParams),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(()=>({error:"unknown"}));
+      logLine("Failed to start: " + (err.error || r.status), "error");
+      return;
+    }
+  } catch (e) {
+    logLine("Network error: " + e.message, "error");
+    return;
+  }
+  document.getElementById("log").innerHTML = "";
+  logLine(`Initiating: ${pendingParams.topic} · ${pendingParams.max_papers} papers · ${pendingParams.max_deep} deep`);
+  PHASES.forEach(p => markPhase(p.key, "pending"));
+  setStartBtn(true);
+  document.getElementById("cancel_btn").disabled = false;
+  document.getElementById("report_btn").disabled = true;
+  openStream();
+}
+
+function setStartBtn(running) {
+  const btn = document.getElementById("start_btn");
+  btn.disabled = running;
+  btn.textContent = running ? "Running..." : "Initiate Analysis";
+  btn.classList.toggle("running", running);
+}
+
+function openStream() {
+  if (evtSource) evtSource.close();
+  evtSource = new EventSource("/stream");
+  evtSource.onmessage = (e) => {
+    let d;
+    try { d = JSON.parse(e.data); } catch { return; }
+    handleEvent(d);
+  };
+  evtSource.onerror = () => {
+    // Server-side close after done/error/cancel. That's fine.
+  };
+}
+
+function handleEvent(d) {
+  switch (d.type) {
+    case "hello":
+      logLine("Stream connected.", "info");
+      break;
+    case "log":
+      logLine(d.message, d.level || "info");
+      break;
+    case "phase_start":
+      markPhase(d.phase_key, "active");
+      break;
+    case "phase_complete":
+      markPhase(d.phase_key, "done");
+      break;
+    case "spend":
+      setSpend(d.amount);
+      break;
+    case "done":
+      logLine("Pipeline complete.", "success");
+      setStartBtn(false);
+      document.getElementById("cancel_btn").disabled = true;
+      document.getElementById("report_btn").disabled = !d.pdf_path;
+      if (evtSource) evtSource.close();
+      break;
+    case "error":
+      logLine("ERROR: " + d.message, "error");
+      setStartBtn(false);
+      document.getElementById("cancel_btn").disabled = true;
+      if (evtSource) evtSource.close();
+      break;
+    case "cancelled":
+      logLine("Cancelled.", "warn");
+      setStartBtn(false);
+      document.getElementById("cancel_btn").disabled = true;
+      if (evtSource) evtSource.close();
+      break;
+  }
+}
+
+async function cancelRun() {
+  await fetch("/cancel", { method: "POST" });
+  document.getElementById("cancel_btn").disabled = true;
+  logLine("Cancellation request sent — will stop after current phase", "warn");
+}
+
+async function openReport() {
+  const r = await fetch("/report");
+  if (!r.ok) {
+    const err = await r.json().catch(()=>({error:"unknown"}));
+    logLine("Could not open report: " + (err.error || r.status), "error");
+  }
+}
+</script>
+</body>
+</html>

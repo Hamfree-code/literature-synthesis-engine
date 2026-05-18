@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Long COVID Research Analysis — {{ date }}</title>
+  <style>
+    :root { --bg: #fafafa; --fg: #1a1a1a; --accent: #2563eb; --border: #e5e7eb; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--fg); line-height: 1.6; max-width: 960px; margin: 0 auto; padding: 2rem; }
+    h1 { font-size: 1.8rem; margin-bottom: 0.5rem; }
+    h2 { font-size: 1.3rem; margin: 2rem 0 0.8rem; border-bottom: 2px solid var(--accent); padding-bottom: 0.3rem; }
+    .meta { color: #666; margin-bottom: 2rem; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+    th, td { padding: 0.5rem 0.75rem; text-align: left; border-bottom: 1px solid var(--border); }
+    th { background: #f3f4f6; font-weight: 600; }
+    .bar { background: var(--accent); height: 1rem; border-radius: 2px; display: inline-block; }
+    .contradiction { background: #fef2f2; border-left: 4px solid #ef4444; padding: 1rem; margin: 0.5rem 0; }
+    .gap { background: #fffbeb; border-left: 4px solid #f59e0b; padding: 1rem; margin: 0.5rem 0; }
+  </style>
+</head>
+<body>
+
+<h1>Long COVID Research Analysis</h1>
+<p class="meta">Generated {{ date }} &mdash; {{ n_papers_analyzed }} papers analyzed</p>
+
+<h2>Symptom Consensus</h2>
+{% if consensus %}
+<table>
+  <tr><th>Symptom</th><th>Studies reporting</th><th>%</th><th></th></tr>
+  {% for symptom, info in consensus.items() %}
+  <tr>
+    <td>{{ symptom }}</td>
+    <td>{{ info.count }}</td>
+    <td>{{ info.pct }}%</td>
+    <td><span class="bar" style="width: {{ info.pct * 3 }}px"></span></td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No symptom data available.</p>
+{% endif %}
+
+<h2>Definition Heterogeneity</h2>
+{% if definition_heterogeneity %}
+<table>
+  <tr><th>Weeks threshold</th><th>Number of studies</th></tr>
+  {% for weeks, count in definition_heterogeneity.items() %}
+  <tr><td>{{ weeks }} weeks</td><td>{{ count }}</td></tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No definition data available.</p>
+{% endif %}
+
+<h2>Study Design Distribution</h2>
+{% if study_designs %}
+<table>
+  <tr><th>Design</th><th>Count</th></tr>
+  {% for design, count in study_designs.items() %}
+  <tr><td>{{ design }}</td><td>{{ count }}</td></tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No study design data available.</p>
+{% endif %}
+
+<h2>Contradictions Detected</h2>
+{% if contradictions %}
+  {% for c in contradictions %}
+  <div class="contradiction">
+    <strong>{{ c.topic }}</strong><br>
+    Paper A: {{ c.claim_a }}<br>
+    Paper B: {{ c.claim_b }}<br>
+    <em>Likely cause: {{ c.likely_cause }}</em>
+  </div>
+  {% endfor %}
+{% else %}
+<p>No contradictions detected (or analysis pending).</p>
+{% endif %}
+
+<h2>Research Gaps</h2>
+{% if gaps %}
+  {% for g in gaps %}
+  <div class="gap">{{ g }}</div>
+  {% endfor %}
+{% else %}
+<p>Gap analysis pending.</p>
+{% endif %}
+
+</body>
+</html>

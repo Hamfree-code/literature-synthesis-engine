@@ -1,0 +1,83 @@
+# Secrets and credentials
+.env
+.env.local
+.env.development
+.env.production
+.env.staging
+.env.*.local
+# Block the real bundled_credentials.py — only the template is committed
+bundled_credentials.py
+!bundled_credentials.template.py
+secrets/
+*.pem
+*.key
+credentials.json
+# Defensive: anything matching common secret-file patterns
+*.secret
+*_secret.*
+*.token
+
+# Pipeline runtime data — never publish
+data/raw/
+data/checkpoints/
+data/filtered/
+data/embeddings/
+reports/
+fulltext_cache.jsonl
+run_meta.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.python-version
+
+# PyInstaller output
+build/
+dist/
+*.spec.bak
+*.exe
+*.dll
+*.zip
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs and temp
+*.log
+*.tmp
+*.swp
+*.bak
+server.out
+server.err
+rebuild*.log
+
+# Local helper scripts (not for distribution)
+patch_*.py
+poll_status.ps1
+run_narcolepsy_test.py
+gen_pdfs.py
+
+# Generated documentation artefacts
+package/
+docs/FILE_TREE.txt

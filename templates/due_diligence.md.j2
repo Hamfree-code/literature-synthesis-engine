@@ -1,0 +1,207 @@
+# {{ topic_title | default("Long COVID") }} — Scientific Due Diligence
+
+*Pharma investment committee brief · {{ date }} · n={{ n_deep }} deeply-analysed papers from {{ n_papers }}-paper corpus*
+
+{% if dd.small_corpus_warning or n_deep|int < 10 %}
+> ⚠️ **Small-corpus warning.** This brief is based on fewer than 10 deeply-analysed papers. Conclusions are hypothesis-generating only.
+{% endif %}
+
+{% if dd.investment_thesis_one_line %}
+> **{{ dd.investment_thesis_one_line }}**
+{% endif %}
+
+---
+
+## Executive Summary
+
+This brief was generated automatically by the Hams & Co. Research Division Literature Synthesis Engine. The same system can be executed over any medical indication available in PubMed Central.
+
+{{ dd.executive_summary | cite if dd.executive_summary else "*Not generated.*" }}
+
+---
+
+## Methodology & Limitations at a Glance
+
+| Metric | Value |
+|---|---|
+| Papers triaged (abstract level) | {{ n_papers }} |
+| Papers deeply analysed | {{ n_deep }} |
+{% if aggregates and aggregates.reconciliations_triggered is defined %}
+| Arbiter reconciliations triggered | {{ aggregates.reconciliations_triggered }} / {{ n_deep }} |
+{% endif %}
+{% if aggregates and aggregates.quadas_distribution %}
+| QUADAS acceptable (> {{ aggregates.quadas_distribution.cutoff }}) | {{ aggregates.quadas_distribution.acceptable_n }} ({{ aggregates.quadas_distribution.acceptable_pct }}%) |
+{% endif %}
+
+**Mandatory disclosure:** All structured extractions are LLM-generated. The provenance layer enables literal-quote verification but does not prevent model error. Cells marked `[LLM]` are model inferences; `[CALC]` are deterministic computations; `[CONSENSUS]` are arbiter-reconciled.
+
+---
+
+## Committee Briefing — 60 Seconds
+
+{% if dd.committee_briefing_one_pager %}
+{% for b in dd.committee_briefing_one_pager %}
+- {{ b | cite }}
+{% endfor %}
+{% endif %}
+
+---
+
+## 1. Target Trial Emulation Landscape
+
+{% if dd.target_trial_emulation_inventory %}
+{{ dd.target_trial_emulation_inventory.summary | cite }}
+
+{% if dd.target_trial_emulation_inventory.studies %}
+
+| DOI | Drug class | Design quality | Phase II signal | Note |
+|---|---|---|---|---|
+{% for s in dd.target_trial_emulation_inventory.studies %}
+| {{ s.doi | cite_doi }} | {{ s.drug_class }} | {{ s.design_quality }} | {{ s.phase_ii_signal }} | {{ s.one_line }} |
+{% endfor %}
+
+{% endif %}
+{% else %}
+*No TTE inventory generated.*
+{% endif %}
+
+---
+
+## 2. Objective Biomarker Bridges (Candidate Phase II Endpoints)
+
+{% if dd.objective_biomarker_bridges %}
+{{ dd.objective_biomarker_bridges.summary | cite }}
+
+{% if dd.objective_biomarker_bridges.candidate_endpoints %}
+
+| Biomarker | n papers | Correlation | Exemplars | Phase II readiness | Note |
+|---|---|---|---|---|---|
+{% for c in dd.objective_biomarker_bridges.candidate_endpoints %}
+| **{{ c.biomarker }}** | {{ c.n_papers_supporting }} | {{ c.correlation_strength }} | {% for d in c.exemplar_dois %}{{ d | cite_doi }}{% if not loop.last %}, {% endif %}{% endfor %} | {{ c.phase_ii_readiness }} | {{ c.one_line }} |
+{% endfor %}
+
+{% endif %}
+{% endif %}
+
+---
+
+## 3. Clean Baseline Subset (Variant + Vaccination Stratified)
+
+{% if dd.clean_baseline_subset %}
+**Size:** {{ dd.clean_baseline_subset.n_studies }} studies ({{ dd.clean_baseline_subset.pct_of_corpus }} of corpus)
+
+{{ dd.clean_baseline_subset.narrative | cite }}
+
+**Key findings from this clean subset:**
+{% for k in dd.clean_baseline_subset.key_findings %}
+- {{ k | cite }}
+{% endfor %}
+{% else %}
+*Clean baseline subset not characterized.*
+{% endif %}
+
+---
+
+## 4. Mechanistic Opportunity Map (Blue vs. Red Ocean)
+
+{% if dd.mechanistic_opportunity_map %}
+{{ dd.mechanistic_opportunity_map.narrative | cite }}
+
+| Mechanism | n papers | Mean GRADE | Signal consistency | Ocean | Exemplars |
+|---|---|---|---|---|---|
+{% for m in dd.mechanistic_opportunity_map.by_mechanism %}
+| **{{ m.mechanism | replace('_', ' ') | title }}** | {{ m.n_papers }} | {{ m.mean_grade_quality }} | {{ m.signal_consistency }} | {{ m.ocean_color | upper }} | {% for d in m.exemplar_dois %}{{ d | cite_doi }}{% if not loop.last %}, {% endif %}{% endfor %} |
+{% endfor %}
+
+{% for m in dd.mechanistic_opportunity_map.by_mechanism %}
+**{{ m.mechanism | replace('_', ' ') | title }} —** {{ m.rationale | cite }}
+
+{% endfor %}
+{% endif %}
+
+---
+
+## 5. Methodological Risk Index per Mechanism
+
+{% if dd.methodological_risk_index %}
+
+| Mechanism | GRADE Low+ | Surveillance bias | No baseline | No vax/variant adj | Risk score |
+|---|---|---|---|---|---|
+{% for r in dd.methodological_risk_index %}
+| **{{ r.mechanism | replace('_', ' ') | title }}** | {{ r.grade_low_or_verylow_pct }} | {{ r.surveillance_bias_pct }} | {{ r.no_baseline_pct }} | {{ r.no_vaccination_adjustment_pct }} | **{{ r.risk_score }}** |
+{% endfor %}
+
+**Interpretations:**
+{% for r in dd.methodological_risk_index %}
+- *{{ r.mechanism | replace('_', ' ') | title }}*: {{ r.interpretation }}
+{% endfor %}
+{% endif %}
+
+---
+
+## 6. Contradictions Matrix — Where Field Wisdom Falls Short
+
+{% if dd.contradictions_matrix %}
+{% for c in dd.contradictions_matrix %}
+### {{ c.topic }}
+
+**Received wisdom:** {{ c.received_wisdom }}
+
+**Contradicting evidence:** {{ c.contradicting_evidence | cite }}
+*Sources:* {% for d in c.contradicting_dois %}{{ d | cite_doi }}{% if not loop.last %}, {% endif %}{% endfor %}
+
+**Implication for Phase II design:** {{ c.implication_for_phase_ii }}
+
+{% endfor %}
+{% else %}
+*No contradictions identified.*
+{% endif %}
+
+---
+
+## 7. Recommended Target Phenotype & Phase II Skeleton
+
+{% if dd.recommended_target_phenotype %}
+> ℹ️ {{ dd.recommended_target_phenotype.preface_disclaimer | default("The following is a hypothesis-generating framework, not a clinical or investment recommendation. All design choices require independent expert validation.") }}
+
+### Target phenotype: **{{ dd.recommended_target_phenotype.phenotype }}**
+
+{% if dd.recommended_target_phenotype.confidence_in_recommendation is defined %}
+**Confidence in recommendation:** {{ dd.recommended_target_phenotype.confidence_in_recommendation }} / 100 · GRADE-Moderate-or-higher supporting papers: {{ dd.recommended_target_phenotype.grade_moderate_or_higher_n | default(0) }} · Threshold met: {{ "yes" if dd.recommended_target_phenotype.threshold_met else "**no**" }}
+{% endif %}
+
+{{ dd.recommended_target_phenotype.rationale | cite }}
+
+#### Phase II Design Skeleton
+
+{% if dd.recommended_target_phenotype.phase_ii_design_skeleton %}
+{% set d = dd.recommended_target_phenotype.phase_ii_design_skeleton %}
+
+**Inclusion criteria:**
+{% for x in d.inclusion_criteria %}
+- {{ x }}
+{% endfor %}
+
+**Exclusion criteria:**
+{% for x in d.exclusion_criteria %}
+- {{ x }}
+{% endfor %}
+
+**Primary endpoint:** {{ d.primary_endpoint }}
+
+**Secondary endpoints:**
+{% for x in d.secondary_endpoints %}
+- {{ x }}
+{% endfor %}
+
+**Comparator:** {{ d.comparator }}
+
+**Sample-size basis:** {{ d.estimated_sample_size_basis }}
+{% endif %}
+
+#### Deal-breakers
+
+{% for db in dd.recommended_target_phenotype.deal_breakers %}
+- {{ db }}
+{% endfor %}
+{% endif %}

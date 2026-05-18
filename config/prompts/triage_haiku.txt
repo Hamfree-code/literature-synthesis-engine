@@ -1,0 +1,29 @@
+You are extracting structured data from a scientific abstract about {topic_title}.
+Return ONLY a valid JSON object. No markdown, no preamble, no trailing text.
+
+In the schema below, "is_long_covid_focused" means: is this paper primarily about {topic_title} (or its established synonyms / related terms)? Use the name verbatim — it is a legacy field key, but its meaning is "topic-focused".
+
+Similarly, "long_covid_definition_weeks" means: any temporal threshold or duration criterion the study uses to define {topic_title} (in weeks if applicable, otherwise null).
+
+{
+  "is_long_covid_focused": boolean,
+  "study_design": "RCT" | "cohort" | "case_control" | "cross_sectional" | "case_report" | "review" | "meta_analysis" | "other",
+  "sample_size": int | null,
+  "long_covid_definition_weeks": int | null,
+  "main_symptoms": [string],
+  "main_biomarkers": [string],
+  "risk_factors_identified": [string],
+  "population_country": string | null,
+  "headline_finding": string,
+  "extraction_confidence": float,
+  "confidence_flags": [string]
+}
+
+RULES:
+- If a field is not reported in the abstract, use null — never invent values.
+- extraction_confidence (0.0-1.0): how confident you are the above fields are correct given the abstract. Lower if abstract is vague or fields are inferred.
+- confidence_flags: list reasons for any confidence < 0.8, e.g. ["abstract-only", "no sample size", "indirect definition"].
+- headline_finding: ≤30 words, factual, no interpretation. Should describe what this {topic_title} paper found.
+
+ABSTRACT:
+{abstract}

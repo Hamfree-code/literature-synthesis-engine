@@ -1,0 +1,337 @@
+# {{ topic_title | default("Long COVID") }} Research Analysis
+
+*Generated {{ date }} · {{ n_papers }} papers triaged · {{ n_deep }} deeply analysed with calibrated certainty + provenance*
+
+{% if synthesis.field_state_one_line %}
+> **{{ synthesis.field_state_one_line }}**
+{% endif %}
+
+---
+
+## Methodology & Limitations at a Glance
+
+This section is mandatory and surfaced at the top of every report (Master Improvement Spec v3.0 — Priority 3.3).
+
+| Metric | Value |
+|---|---|
+| Papers triaged (abstract level, Haiku) | {{ n_papers }} |
+| Papers deeply analysed (Sonnet) | {{ n_deep }} |
+{% if aggregates.deep_extraction_yield %}
+| Deep-extraction yield | {{ aggregates.deep_extraction_yield.succeeded }} / {{ aggregates.deep_extraction_yield.requested }} ({{ ((aggregates.deep_extraction_yield.succeeded or 0) / (aggregates.deep_extraction_yield.requested or 1) * 100) | round(1) }}%) |
+{% endif %}
+{% if aggregates.reconciliations_triggered is defined %}
+| Arbiter reconciliations triggered | {{ aggregates.reconciliations_triggered }} / {{ n_deep }} |
+{% endif %}
+{% if aggregates.quadas_distribution %}
+| QUADAS acceptable (> {{ aggregates.quadas_distribution.cutoff }}) | {{ aggregates.quadas_distribution.acceptable_n }} ({{ aggregates.quadas_distribution.acceptable_pct }}%) |
+{% endif %}
+| API cost approximation | ~${{ ((n_papers|int * 0.003) + (n_deep|int * 0.45)) | round(2) }} (Batch API, with arbiter pass) |
+{% if aggregates.has_human_ratings %}
+| Human-vs-AI Cohen's Kappa | {{ aggregates.kappa_summary | default("see appendix") }} |
+{% else %}
+| Human ratings for validation | none provided (validation engine inactive for this run) |
+{% endif %}
+
+**Mandatory disclosure:** All structured extractions are LLM-generated. The provenance layer enables literal-quote verification but does not prevent model error. Every cell in this report tagged `[LLM]` is a model inference; cells tagged `[CALC]` are deterministic derivations (DerSimonian–Laird pooling, Egger's approximation, etc.); cells tagged `[CONSENSUS]` are arbiter-reconciled outputs of two independent reviewer extractions.
+
+---
+
+## Executive Summary
+
+{{ synthesis.executive_summary | cite if synthesis.executive_summary else "*Synthesis not generated.*" }}
+
+---
+
+## Methods (Brief)
+
+This analysis ingests open-access scientific literature on {{ topic_title | default("the selected topic") }} from PubMed Central via NCBI E-utilities. Each paper is triaged at the abstract level (Claude Haiku 4.5) with self-reported `extraction_confidence`. The top {{ n_deep }} papers — ranked by sample size × design weight × extraction confidence — are then fetched as **full text** from PMC Open Access (references stripped) and analysed by Claude Sonnet 4.6 under a two-stage protocol: factual extraction followed by methodological appraisal (NOS, GRADE, MCID, 8-axis bias audit, mechanistic phenotype mapping, calibrated certainty). Every deep-extracted claim is grounded in a **literal-quote provenance record** stored in the database. Cross-paper consensus is computed by propagating per-paper certainty into a 5-tier evidence taxonomy. A final synthesis pass distills this into the prose below.
+
+This is *not* a systematic review (no PRISMA flow, no formal external risk-of-bias tooling). It is a structured cartography of the literature with explicit uncertainty. The methodological additions below (QUADAS scoring, random-effects pooling, leave-one-out sensitivity, publication-bias assessment) emulate the analytical standard of Siciliano et al., *Movement Disorders* 2024 (DOI: 10.1002/mds.29649), with documented limitations.
+
+{% if aggregates.deep_extraction_yield and aggregates.deep_extraction_yield.failed %}
+**Deep-extraction yield:** {{ aggregates.deep_extraction_yield.succeeded }} / {{ aggregates.deep_extraction_yield.requested }} papers successfully extracted ({{ aggregates.deep_extraction_yield.failed }} failed — typically JSON-parse failures on oversized Sonnet output, or API errors). The synthesis below is conditioned on the successful subset; failed papers are not represented in any quantitative table.
+{% endif %}
+
+---
+
+## Methodological Quality (QUADAS-adapted) {{ "x" | calc }}
+
+{% if aggregates.quadas_distribution %}
+{% set q = aggregates.quadas_distribution %}
+Of {{ q.n }} deeply-analysed papers, **{{ q.acceptable_n }} ({{ q.acceptable_pct }}%)** met the adapted QUADAS quality threshold (score > {{ q.cutoff }} / {{ q.cutoff + 1 }}+ out of 19) and were retained for quantitative meta-analytic synthesis. **{{ q.excluded_n }} papers** were excluded for low methodological quality and are surfaced in the limitations section only.
+
+| Statistic | Value |
+|---|---|
+| Papers scored | {{ q.n }} |
+| Mean QUADAS | {{ q.mean }} / 19 |
+| Median | {{ q.median }} |
+| Range | {{ q.min }}–{{ q.max }} |
+| Acceptable (> {{ q.cutoff }}) | {{ q.acceptable_n }} ({{ q.acceptable_pct }}%) |
+| Excluded from synthesis | {{ q.excluded_n }} |
+
+*QUADAS scoring is LLM-generated, not produced by two independent reviewers with arbitration — a declared limitation.*
+{% else %}
+*QUADAS scoring data not available (no deep extractions yet).*
+{% endif %}
+
+---
+
+{% if aggregates.meta_analysis_by_factor %}
+## Heterogeneity Analysis {{ "x" | calc }}
+
+Random-effects pooling (DerSimonian–Laird τ², inverse-variance method) was applied to every factor with ≥ 2 reporting studies in the QUADAS-acceptable subset. The table below summarises pooled r and I² heterogeneity per factor.
+
+| Factor | n studies | I² | Model | Pooled r | 95% CI |
+|---|---|---|---|---|---|
+{% for factor, m in aggregates.meta_analysis_by_factor.items() %}
+| {{ factor }} | {{ m.n_studies }} | {{ "%.1f"|format(m.i_squared or 0) }}% | {{ m.model | replace('_', ' ') }} | {{ "%.3f"|format(m.pooled_r or 0) }} | [{{ "%.2f"|format(m.ci[0] or 0) }}, {{ "%.2f"|format(m.ci[1] or 0) }}] |
+{% endfor %}
+
+**Model legend:** *fixed effects* (I² < 25%) · *random effects recommended* (25–74%) · *random effects mandatory* (75–89%) · *random effects critical* (≥ 90%, with moderator analysis below).
+
+---
+{% endif %}
+
+{% if aggregates.forest_plots %}
+
+### Forest plots (I² ≥ 90%)
+
+For each outcome with critical heterogeneity, the random-effects forest plot below and the moderator analysis that follows are mandatory reading before citing the pooled estimate.
+
+{% for factor, plot in aggregates.forest_plots.items() %}
+**{{ factor }}**
+
+```
+{{ plot }}
+```
+
+{% set ma = aggregates.meta_analysis_by_factor[factor].moderator_analysis %}
+{% if ma and not ma.get('_parse_failed') and not ma.get('_error') %}
+**Moderator analysis ({{ factor }}) — meta-analytic ANOVA approximation**
+
+*Primary heterogeneity source:* **{{ ma.primary_heterogeneity_source }}**
+
+{{ ma.clinical_interpretation }}
+
+{% if ma.moderators_tested %}
+| Variable | Subgroup A | Subgroup B | Rel. diff | Substantial? |
+|---|---|---|---|---|
+{% for t in ma.moderators_tested %}
+| {{ t.variable }} | {{ t.subgroup_a.label }} (r={{ "%.2f"|format(t.subgroup_a.effect or 0) }}, n={{ t.subgroup_a.n_studies }}) | {{ t.subgroup_b.label }} (r={{ "%.2f"|format(t.subgroup_b.effect or 0) }}, n={{ t.subgroup_b.n_studies }}) | {{ "%.1f"|format(t.relative_difference_pct or 0) }}% | {{ "YES" if t.substantial_difference else "no" }} |
+{% endfor %}
+{% endif %}
+
+> ⚠️ {{ ma.caution_statement }}
+{% endif %}
+
+{% endfor %}
+{% endif %}
+
+{% set pb_factors = [] %}
+{% if aggregates.meta_analysis_by_factor %}
+{% for factor, m in aggregates.meta_analysis_by_factor.items() %}
+{% if m.publication_bias and m.publication_bias.n_studies and m.publication_bias.n_studies >= 10 %}
+{% set _ = pb_factors.append((factor, m)) %}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% if pb_factors %}
+
+## Publication Bias Assessment
+
+For each factor with ≥ 10 studies in the QUADAS-acceptable subset, an approximated funnel-symmetry test, Egger's regression p-value, and trim-and-fill estimate are reported. **These are LLM/numpy approximations, not the formal R `meta` or ProMeta 3 implementations** — a declared limitation.
+
+| Factor | n | Funnel symmetry | Egger's p (approx.) | Missing studies (trim-fill) | Risk |
+|---|---|---|---|---|---|
+{% for factor, m in pb_factors %}
+| {{ factor }} | {{ m.publication_bias.n_studies }} | {{ m.publication_bias.funnel_symmetry }} | {{ "%.3f"|format(m.publication_bias.egger_p or 0) }} | {{ m.publication_bias.estimated_missing_studies }} | {{ m.publication_bias.publication_bias_risk }} |
+{% endfor %}
+
+---
+{% endif %}
+
+---
+
+## Key Findings, by Calibrated Certainty {{ "x" | llm }}
+
+{% if synthesis.key_findings_summary %}
+
+### Established
+{% if synthesis.key_findings_summary.established %}
+{% for f in synthesis.key_findings_summary.established %}
+- {{ f | cite }}
+{% endfor %}
+{% else %}*Nothing in this tier with the current corpus.*{% endif %}
+
+### Probable
+{% if synthesis.key_findings_summary.probable %}
+{% for f in synthesis.key_findings_summary.probable %}
+- {{ f | cite }}
+{% endfor %}
+{% else %}*No findings in this tier.*{% endif %}
+
+### Possible (weak)
+{% if synthesis.key_findings_summary.possible_but_weak %}
+{% for f in synthesis.key_findings_summary.possible_but_weak %}
+- {{ f | cite }}
+{% endfor %}
+{% else %}*No findings in this tier.*{% endif %}
+
+### Contradicted
+{% if synthesis.key_findings_summary.contradicted %}
+{% for f in synthesis.key_findings_summary.contradicted %}
+- {{ f | cite }}
+{% endfor %}
+{% else %}*No directly contradicted findings detected.*{% endif %}
+{% else %}
+*Key findings not generated.*
+{% endif %}
+
+{% if aggregates.findings_by_certainty %}
+
+**Quantitative breakdown across all symptom-level findings:**
+
+| Certainty | # symptom-findings |
+|---|---|
+| Established | {{ aggregates.findings_by_certainty.established | length }} |
+| Probable | {{ aggregates.findings_by_certainty.probable | length }} |
+| Possible | {{ aggregates.findings_by_certainty.possible | length }} |
+| Speculative | {{ aggregates.findings_by_certainty.speculative | length }} |
+| Contradicted | {{ aggregates.findings_by_certainty.contradicted | length }} |
+
+*Per-symptom certainty rows are stored in `aggregates.calibrated_consensus_top` (top 50) and viewable in the underlying analysis.json. They are intentionally NOT rendered here to keep the report focused.*
+{% endif %}
+
+---
+
+## Definitional Heterogeneity
+
+{{ synthesis.definition_problem_narrative | cite if synthesis.definition_problem_narrative else "*Narrative not generated.*" }}
+
+**Threshold distribution across the corpus:**
+
+| Threshold | # of studies |
+|---|---|
+{% for weeks, count in aggregates.definition_heterogeneity.items() %}
+| ≥{{ weeks }} weeks | {{ count }} |
+{% endfor %}
+
+---
+
+## Symptom Landscape {{ "x" | llm }}
+
+{{ synthesis.symptom_landscape_narrative | cite if synthesis.symptom_landscape_narrative else "*Narrative not generated.*" }}
+
+**Top 10 symptoms by paper count (triage-level):**
+
+| Symptom | Studies reporting | Prevalence |
+|---|---|---|
+{% for symptom, info in aggregates.consensus.items() %}
+{% if loop.index <= 10 %}
+| {{ symptom }} | {{ info.count }} | {{ info.pct }}% |
+{% endif %}
+{% endfor %}
+
+*({{ aggregates.consensus | length }} unique symptom labels in the full corpus — most are long-tail with single-study mentions.)*
+
+---
+
+## Methodology Quality
+
+{% if synthesis.methodology_quality_overview %}
+{{ synthesis.methodology_quality_overview.narrative | cite }}
+
+**GRADE distribution across {{ n_deep }} deeply-analysed papers:**
+
+| GRADE certainty | Count |
+|---|---|
+{% for grade, count in synthesis.methodology_quality_overview.grade_distribution.items() %}
+| {{ grade }} | {{ count }} |
+{% endfor %}
+
+{% set nos = aggregates.methodology_quality.nos_mean if aggregates.methodology_quality is defined else None %}
+{% if nos %}
+**Mean Newcastle-Ottawa score** (observational subset): **{{ "%.2f"|format(nos) }} / 9**
+{% endif %}
+{% endif %}
+
+---
+
+## Bias Audit
+
+{% if synthesis.bias_audit_summary %}
+
+| Bias category | Frequency | Consequence |
+|---|---|---|
+{% for b in synthesis.bias_audit_summary.top_biases_table %}
+| {{ b.name }} | {{ b.pct }} | {{ b.consequence }} |
+{% endfor %}
+
+{{ synthesis.bias_audit_summary.narrative | cite }}
+{% endif %}
+
+---
+
+## Mechanistic Phenotypes {{ "x" | consensus }}
+
+{% if synthesis.phenotype_breakdown and synthesis.phenotype_breakdown.counts %}
+
+| Mechanism | Papers |
+|---|---|
+{% for ph, count in synthesis.phenotype_breakdown.counts.items() %}
+| {{ ph | replace('_', ' ') | title }} | {{ count }} |
+{% endfor %}
+
+{{ synthesis.phenotype_breakdown.narrative | cite }}
+{% endif %}
+
+---
+
+## Major Contradictions
+
+{% if synthesis.contradictions %}
+{% for c in synthesis.contradictions %}
+### {{ c.topic }}
+
+> **{{ c.paper_a_id | cite_doi }}:** "{{ c.claim_a }}"
+
+> **{{ c.paper_b_id | cite_doi }}:** "{{ c.claim_b }}"
+
+*Likely cause:* {{ c.likely_cause | cite }}
+
+{% endfor %}
+{% else %}
+*No direct contradictions identified at this scale.*
+{% endif %}
+
+---
+
+## Research Gaps & Recommended Next Steps
+
+{% if synthesis.gaps_and_recommendations %}
+{% for g in synthesis.gaps_and_recommendations %}
+**{{ g.area }}**
+
+{{ g.rationale | cite }}
+
+*→ Actionable next step:* {{ g.actionable_next_step }}
+
+{% endfor %}
+{% else %}
+*No structured gaps generated.*
+{% endif %}
+
+---
+
+## Limitations of This Analysis
+
+{% if synthesis.limitations_of_this_analysis %}
+{% for l in synthesis.limitations_of_this_analysis %}
+- {{ l }}
+{% endfor %}
+{% else %}
+- Sample size: {{ n_papers }} triaged papers; full PubMed Long COVID corpus exceeds this.
+- {{ n_deep }} deep-extracted; remainder is abstract-only.
+- LLM extraction: all structured fields are model-generated. The provenance layer enables literal-quote verification.
+- Not a systematic review: no PRISMA flow, no external risk-of-bias scoring beyond integrated NOS/GRADE per paper.
+{% endif %}

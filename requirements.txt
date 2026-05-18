@@ -1,0 +1,44 @@
+# Literature Synthesis Engine — runtime dependencies
+# Pin Python: >=3.12,<3.13 (see pyproject.toml)
+
+# Web server + templating
+flask>=3.0
+jinja2>=3.1
+
+# Anthropic SDK (Claude Haiku 4.5 + Sonnet 4.6 — triage, deep extraction, synthesis, arbiter)
+anthropic>=0.40
+
+# HTTP client with HTTP/2 for NCBI + biorxiv + CrossRef
+httpx[http2]>=0.27
+
+# Retries / backoff
+tenacity>=8.0
+
+# Typed configuration loader
+pydantic>=2.0
+pydantic-settings>=2.0
+
+# Supabase client (PostgREST + pgvector)
+supabase>=2.0
+
+# NCBI E-utilities client (PMC ingestion)
+biopython>=1.83
+
+# XML parsing for PMC full text + semantic section bucketing
+lxml>=5.0
+
+# Numerics — random-effects meta-analysis, Egger's regression, trim-and-fill
+numpy>=1.26
+
+# Optional clustering (currently bundled but underused; safe to omit)
+scikit-learn>=1.4
+
+# Markdown -> HTML -> PDF
+markdown>=3.5
+reportlab>=4.0
+
+# Console logging
+rich>=13.0
+
+# PyInstaller is only needed for building the .exe, not for running
+# pyinstaller>=6.0

@@ -1,0 +1,32 @@
+A critical heterogeneity (I² = {i_squared}%) has been detected in the meta-analytic synthesis of "{outcome}" across {n_studies} studies. Random-effects pooling is used, but the residual heterogeneity is too high to interpret the pooled estimate without identifying its sources.
+
+Your job: emulate a meta-analytic ANOVA (Qb test) over the available moderator variables. For each moderator with sufficient data, partition the studies into subgroups, compute the pooled effect within each, and identify whether the between-subgroup difference is substantial (defined here as ≥ 20% relative difference in the pooled estimate).
+
+Return ONLY JSON. No preamble, no markdown.
+
+INPUT — extracted moderators per study and per-study effect size:
+{moderators_json}
+
+OUTPUT SCHEMA:
+{
+  "primary_heterogeneity_source": "string — the moderator that best explains the heterogeneity, or 'unexplained' if no moderator partitions the data convincingly",
+  "moderators_tested": [
+    {
+      "variable": "name of moderator",
+      "subgroup_a": {"label": "string (e.g. '≥50% female')", "effect": float, "n_studies": int},
+      "subgroup_b": {"label": "string (e.g. '<50% female')", "effect": float, "n_studies": int},
+      "relative_difference_pct": float,
+      "substantial_difference": true | false,
+      "interpretation": "1-2 sentences explaining what this subgroup contrast means clinically or methodologically"
+    }
+  ],
+  "clinical_interpretation": "string — 100-200 words synthesising what the moderator analysis reveals about the heterogeneity",
+  "caution_statement": "string — explicit warning to the reader about how to interpret the pooled estimate given the heterogeneity sources identified"
+}
+
+RULES:
+- Only test a moderator if at least 4 studies have non-null values for it (2 per subgroup minimum).
+- Use a natural cut-point per moderator (median, or substantively meaningful threshold). Document the threshold in the subgroup label.
+- "substantial_difference" must be true only if the relative_difference_pct ≥ 20%.
+- "primary_heterogeneity_source" picks the moderator with the largest substantial difference. If none, return "unexplained".
+- The caution statement must be specific to the moderator findings — not boilerplate.

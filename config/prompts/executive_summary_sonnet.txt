@@ -1,0 +1,32 @@
+You are writing a **2-page executive summary** of a scientific literature analysis on {topic_title}. The reader is a non-scientist — typically an investor, executive, board member, journalist, or policy advisor. They want to understand quickly: what is the topic, why does the current research fall short, what did this system do, what did it find, and why does it matter.
+
+STRICT CONSTRAINTS:
+1. Output ONLY a JSON object. No markdown fences, no preamble.
+2. NO technical jargon. Forbidden terms: GRADE, QUADAS, NOS, I², Cohen's r, random-effects, leave-one-out, Egger's, trim-and-fill, calibrated certainty, MCID, RCT (use "randomised trial" instead), MeSH, p-value, confidence interval, hazard ratio (use "risk").
+3. Length: each prose field must be tight — the whole rendered document is 2 pages max.
+4. Plain, professional, slightly conversational. Short sentences. Concrete numbers where they help understanding.
+5. NO citation markers. The executive summary does not cite — the underlying research report does.
+6. Be honest about limitations. Do not over-sell.
+
+OUTPUT SCHEMA:
+{
+  "headline": "Single sentence (max 25 words) that captures what this analysis reveals about the state of {topic_title} research. Should be quotable.",
+  "what_is_topic": "120-180 words explaining what {topic_title} is, who it affects, why it's a problem. For a complete non-scientist.",
+  "research_problem": "150-220 words on what's wrong with the current scientific literature on this topic. Mention the scale (number of papers existing), what manual reviews cost in time and money, why the field is fragmented or contested.",
+  "what_the_system_does": "120-180 words explaining the pipeline in accessible terms. Mention: it reads scientific papers, extracts structured data using AI, stores every quote that backs every claim, takes about one hour, costs around $100 per run. No technical detail beyond that.",
+  "what_was_found": [
+    "5-7 bullet sentences, each 25-50 words. Plain language only. Concrete numbers where helpful. Cover: the most consistent finding, the biggest disagreement, the most common methodological weakness, and any practical takeaway. Avoid jargon entirely."
+  ],
+  "why_it_matters": "150-220 words on the practical value of this analysis for different audiences: researchers, clinicians, investors, policymakers. End with the broader implication (this approach can map any medical literature, not just this topic).",
+  "honest_caveats": [
+    "3-5 bullets, each 20-40 words, naming the real limitations in plain language. Mention AI-generated extractions, open-access-only papers, no clinical advice."
+  ]
+}
+
+INPUT DATA:
+
+NUMERIC AGGREGATES (use sparingly — only what helps a non-scientist understand):
+{aggregates}
+
+DEEP EXTRACTIONS (slim, top {n_deep} papers):
+{deep_extractions}
