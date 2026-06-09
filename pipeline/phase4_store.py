@@ -148,6 +148,56 @@ def map_deep_to_schema(d: dict) -> dict:
     return out
 
 
+def screen_retractions(deep_ids: set[str], papers_by_id: dict[str, dict]) -> list[dict]:
+    """P2.2: cross-check each deep paper's DOI against Crossref. Writes
+    data/filtered/retracted.jsonl (consumed by Phase 5) and updates the papers
+    table. Bounded to the deep set so Crossref is never hit thousands of times.
+    Returns the list of retraction records."""
+    import httpx
+
+    from config.settings import settings
+    from utils.retraction import check_crossref_retraction
+
+    if not settings.RETRACTION_CHECK_ENABLED:
+        return []
+
+    retracted: list[dict] = []
+    ua = {"User-Agent": "LitSynthEngine/3.1 (mailto:research@example.com)"}
+    with httpx.Client(headers=ua, timeout=15) as client:
+        for pid in sorted(deep_ids):
+            doi = (papers_by_id.get(pid) or {}).get("doi")
+            if not doi:
+                continue
+            info = check_crossref_retraction(doi, client=client)
+            if info and info.get("is_retracted"):
+                retracted.append({"paper_id": pid, "doi": doi, **info})
+
+    out = app_data("data/filtered/retracted.jsonl")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w", encoding="utf-8") as f:
+        for rec in retracted:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+    if retracted:
+        console.print(f"[red]Retraction screen: {len(retracted)} retracted paper(s) flagged[/]")
+        try:
+            from utils.supabase_client import sb
+
+            for rec in retracted:
+                sb().table("papers").update(
+                    {
+                        "is_retracted": True,
+                        "retraction_doi": rec.get("retraction_doi"),
+                        "retraction_date": rec.get("retraction_date"),
+                    }
+                ).eq("id", rec["paper_id"]).execute()
+        except Exception as e:
+            console.print(f"[yellow]Could not persist retraction flags: {e}[/]")
+    else:
+        console.print("[green]Retraction screen: no retractions found in deep set[/]")
+    return retracted
+
+
 def run() -> None:
     checkpoint = Checkpoint("phase4_store")
     if checkpoint.is_complete():
@@ -158,6 +208,16 @@ def run() -> None:
 
     papers_path = app_data("data/raw/papers.jsonl")
     triage_path = app_data("data/filtered/triage_results.jsonl")
+
+    # Index raw papers (with DOIs) for the retraction screen below.
+    papers_raw_by_id: dict[str, dict] = {}
+    if papers_path.exists():
+        for line in papers_path.open(encoding="utf-8"):
+            try:
+                p = json.loads(line)
+                papers_raw_by_id[p["id"]] = p
+            except (json.JSONDecodeError, KeyError):
+                pass
 
     if papers_path.exists():
         papers = [project_paper(json.loads(line)) for line in papers_path.open(encoding="utf-8")]
@@ -177,12 +237,14 @@ def run() -> None:
         console.print(f"Upserted {count} triage extractions")
 
     deep_path = app_data("data/filtered/deep_results.jsonl")
+    deep_ids: set[str] = set()
     if deep_path.exists():
         count = 0
         prov_total = 0
         for line in deep_path.open(encoding="utf-8"):
             data = json.loads(line)
             paper_id = data.pop("paper_id")
+            deep_ids.add(paper_id)
             provenance_entries = data.pop("provenance", None) or []
             mapped = map_deep_to_schema(data)
             upsert_extraction(paper_id, "fulltext", mapped)
@@ -194,6 +256,10 @@ def run() -> None:
                     console.print(f"[yellow]Provenance store failed for {paper_id}: {e}[/]")
             count += 1
         console.print(f"Upserted {count} deep extractions, {prov_total} provenance entries")
+
+    # P2.2: retraction screen over the deep set (writes retracted.jsonl for Phase 5).
+    if deep_ids:
+        screen_retractions(deep_ids, papers_raw_by_id)
 
     # v3: persist UMLS-normalised entities to extracted_phenotypes
     norm_path = app_data("data/filtered/normalized_entities.jsonl")
@@ -216,6 +282,9 @@ def run() -> None:
                         "mesh_heading": e.get("mesh_heading") or None,
                         "entity_type": e.get("entity_type"),
                         "llm_judgment": bool(e.get("llm_judgment", True)),
+                        # P2.1: real-UMLS verification result
+                        "cui_verified": bool(e.get("cui_verified", False)),
+                        "preferred_name": e.get("preferred_name") or None,
                     }
                 )
         if rows:

@@ -493,11 +493,14 @@ def _run_umls_normalization() -> None:
     deep_path = app_data("data/filtered/deep_results.jsonl")
     if not deep_path.exists():
         return
+    from utils.umls_client import verification_available, verify_entities
     from utils.umls_normalizer import normalize_extraction
 
     out_path = app_data("data/filtered/normalized_entities.jsonl")
     total = 0
+    verified = 0
     papers_with_entities = 0
+    do_verify = verification_available()  # P2: only when UMLS_API_KEY is set
     with out_path.open("w", encoding="utf-8") as f:
         for line in deep_path.open(encoding="utf-8"):
             try:
@@ -509,10 +512,17 @@ def _run_umls_normalization() -> None:
                 continue
             normalized = normalize_extraction(rec)
             if normalized:
+                if do_verify:
+                    normalized = verify_entities(normalized)
+                    verified += sum(1 for e in normalized if e.get("cui_verified"))
                 papers_with_entities += 1
                 total += len(normalized)
                 f.write(json.dumps({"paper_id": pid, "entities": normalized}, ensure_ascii=False) + "\n")
-    console.print(f"UMLS normalization: {total} entities normalised across {papers_with_entities} papers")
+    pct = round(100.0 * verified / total, 1) if total else 0.0
+    suffix = f", {verified} CUIs verified ({pct}%)" if do_verify else " (UMLS verification offline)"
+    console.print(
+        f"UMLS normalization: {total} entities normalised across {papers_with_entities} papers{suffix}"
+    )
 
 
 def run_deep(paper_ids: list[str]) -> None:

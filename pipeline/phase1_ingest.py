@@ -92,7 +92,10 @@ def build_query(
     else:
         base = LONG_COVID_QUERY
     if mesh_terms and mesh_terms.strip():
-        return f"({base}) AND ({mesh_terms.strip()})"
+        base = f"({base}) AND ({mesh_terms.strip()})"
+    # P2.2: exclude retracted publications by default (configurable).
+    if not settings.INCLUDE_RETRACTED:
+        base = f'({base}) NOT "Retracted Publication"[Publication Type]'
     return base
 
 
