@@ -17,6 +17,7 @@ from rich.progress import Progress
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config.settings import settings
+from pipeline.sources.openalex import normalize_doi
 from utils.checkpointing import Checkpoint
 
 console = Console()
@@ -226,8 +227,29 @@ async def fetch_pmc_fulltext_structured(pmc_id: str, client: httpx.AsyncClient) 
     return sections
 
 
+def _doi_index() -> dict[str, str]:
+    """Map paper_id → DOI from the ingested corpus (for Unpaywall fallback)."""
+    out: dict[str, str] = {}
+    for name in ("data/filtered/relevant_papers.jsonl", "data/raw/papers.jsonl"):
+        path = app_data(name)
+        if path.exists():
+            for line in path.open(encoding="utf-8"):
+                try:
+                    p = json.loads(line)
+                    if p.get("doi"):
+                        out.setdefault(p["id"], p["doi"])
+                except (json.JSONDecodeError, KeyError):
+                    pass
+    return out
+
+
 async def enrich_with_fulltext(paper_ids: list[str]) -> None:
-    """Fetch and store full text in local cache + Supabase for given paper IDs."""
+    """Fetch and store full text for given paper IDs.
+
+    UPGRADE v3.1 — P4.2: when PMC OA has no full text (non-PMC ids, or PMC miss),
+    fall back to an Unpaywall-declared OA PDF. The source of each full text is
+    recorded so the report can break down full-text coverage by route.
+    """
     from utils.supabase_client import sb
 
     cache_path = app_data("data/raw/fulltext_cache.jsonl")
@@ -240,29 +262,51 @@ async def enrich_with_fulltext(paper_ids: list[str]) -> None:
             except (json.JSONDecodeError, KeyError):
                 pass
 
-    ok = 0
+    doi_index = _doi_index()
+    ok_pmc = 0
+    ok_unpaywall = 0
     skipped_cached = 0
     miss = 0
+
+    def _persist(cache_f, pid: str, text: str, source: str) -> None:
+        try:
+            sb().table("papers").update({"full_text": text}).eq("id", pid).execute()
+        except Exception:
+            pass  # Supabase optional in local/dev
+        cache_f.write(json.dumps({"paper_id": pid, "full_text": text, "fulltext_source": source}) + "\n")
+
     async with httpx.AsyncClient(http2=True, limits=httpx.Limits(max_connections=3)) as client:
         with cache_path.open("a", encoding="utf-8") as cache_f:
             for pid in paper_ids:
                 if pid in cached_ids:
                     skipped_cached += 1
                     continue
-                raw_id = pid.replace("PMC", "")
-                if pid.startswith("medrxiv_"):
-                    miss += 1
-                    continue
-                full_text = await fetch_pmc_fulltext(raw_id, client)
-                if full_text:
-                    sb().table("papers").update({"full_text": full_text}).eq("id", pid).execute()
-                    cache_f.write(json.dumps({"paper_id": pid, "full_text": full_text}) + "\n")
-                    ok += 1
-                else:
-                    miss += 1
-                await asyncio.sleep(0.4)
+                full_text = None
+                if pid.startswith("PMC"):
+                    full_text = await fetch_pmc_fulltext(pid.replace("PMC", ""), client)
+                    if full_text:
+                        _persist(cache_f, pid, full_text, "pmc_oa")
+                        ok_pmc += 1
+                        await asyncio.sleep(0.4)
+                        continue
+                # P4.2 fallback: Unpaywall OA PDF (covers medRxiv/non-PMC + PMC misses).
+                doi = doi_index.get(pid)
+                if doi and settings.UNPAYWALL_ENABLED:
+                    from pipeline.sources.unpaywall import fetch_fulltext_via_unpaywall
 
-    console.print(f"Full-text enrichment: {ok} fetched, {skipped_cached} cached, {miss} unavailable")
+                    text = await asyncio.to_thread(fetch_fulltext_via_unpaywall, doi)
+                    if text:
+                        _persist(cache_f, pid, text, "unpaywall_flat_pdf")
+                        ok_unpaywall += 1
+                        await asyncio.sleep(0.2)
+                        continue
+                miss += 1
+                await asyncio.sleep(0.2)
+
+    console.print(
+        f"Full-text enrichment: {ok_pmc} PMC OA, {ok_unpaywall} Unpaywall, "
+        f"{skipped_cached} cached, {miss} unavailable"
+    )
 
 
 async def fetch_medrxiv_papers(
@@ -430,37 +474,72 @@ async def run(max_papers: int = 5000, topic: str | None = None, mesh_terms: str 
                             ok += 1
                     progress.update(task, advance=len(batch), description=f"PMC (ok: {ok}/{len(batch)})")
 
-    console.print("[cyan]Fetching medRxiv preprints...[/]")
+    # Existing DOIs (PMC wins dedup ties — we already hold its full text).
     pmc_dois: set[str] = set()
+    n_pmc = 0
     with out_path.open(encoding="utf-8") as f:
         for line in f:
             try:
-                d = json.loads(line).get("doi")
-                if d:
-                    pmc_dois.add(d.lower())
+                rec = json.loads(line)
+                n_pmc += 1
+                if rec.get("doi"):
+                    pmc_dois.add(normalize_doi(rec["doi"]))
             except json.JSONDecodeError:
                 pass
 
-    topic_low = (topic or "long covid").strip().lower()
-    if "covid" in topic_low or "pasc" in topic_low:
-        medrxiv_terms = ["long covid", "post-acute sequelae", "PASC", "post-COVID condition"]
-    elif synonyms:
-        medrxiv_terms = [s.lower() for s in synonyms]
-    else:
-        medrxiv_terms = [topic_low]
-        if " " in topic_low:
-            medrxiv_terms.append(topic_low.replace(" ", "-"))
+    sources_breakdown = {"pmc": n_pmc, "openalex": 0, "medrxiv": 0}
 
-    medrxiv_papers = await fetch_medrxiv_papers(
-        query_terms=medrxiv_terms,
-        max_results=min(2000, max_papers // 2),
+    # P4.1: OpenAlex discovery (incl. server-side preprint search that replaces
+    # the slow client-side medRxiv scan unless MEDRXIV_LEGACY is forced).
+    if settings.OPENALEX_ENABLED:
+        from pipeline.sources.openalex import dedup_against, search_openalex
+
+        oa_query = topic_clean if topic_clean.lower() != "long covid" else "long covid OR PASC"
+        console.print("[cyan]Querying OpenAlex (works + preprints, server-side)...[/]")
+        oa_papers = await asyncio.to_thread(search_openalex, oa_query, max_results=min(2000, max_papers))
+        oa_unique = dedup_against(oa_papers, pmc_dois)
+        with out_path.open("a", encoding="utf-8") as f:
+            for p in oa_unique:
+                if p.get("abstract"):
+                    f.write(json.dumps(p) + "\n")
+                    pmc_dois.add(normalize_doi(p.get("doi")))
+                    if p["source"] == "medrxiv":
+                        sources_breakdown["medrxiv"] += 1
+                    else:
+                        sources_breakdown["openalex"] += 1
+        console.print(
+            f"OpenAlex: {len(oa_papers)} candidates, {len(oa_unique)} unique after dedupe "
+            f"({sources_breakdown['openalex']} journal, {sources_breakdown['medrxiv']} preprint)"
+        )
+
+    # Legacy client-side medRxiv scan — only when explicitly requested.
+    if settings.MEDRXIV_LEGACY:
+        console.print("[cyan]Fetching medRxiv preprints (legacy client-side scan)...[/]")
+        topic_low = (topic or "long covid").strip().lower()
+        if "covid" in topic_low or "pasc" in topic_low:
+            medrxiv_terms = ["long covid", "post-acute sequelae", "PASC", "post-COVID condition"]
+        elif synonyms:
+            medrxiv_terms = [s.lower() for s in synonyms]
+        else:
+            medrxiv_terms = [topic_low]
+            if " " in topic_low:
+                medrxiv_terms.append(topic_low.replace(" ", "-"))
+        medrxiv_papers = await fetch_medrxiv_papers(
+            query_terms=medrxiv_terms, max_results=min(2000, max_papers // 2)
+        )
+        new_medrxiv = [p for p in medrxiv_papers if normalize_doi(p.get("doi")) not in pmc_dois]
+        with out_path.open("a", encoding="utf-8") as f:
+            for p in new_medrxiv:
+                if p.get("abstract"):
+                    f.write(json.dumps(p) + "\n")
+                    sources_breakdown["medrxiv"] += 1
+        console.print(f"medRxiv legacy: {len(medrxiv_papers)} candidates, {len(new_medrxiv)} unique")
+
+    # Persist the per-source breakdown for the report / run manifest (P6).
+    app_data("data/raw/sources_breakdown.json").write_text(
+        json.dumps(sources_breakdown, indent=2), encoding="utf-8"
     )
-    new_medrxiv = [p for p in medrxiv_papers if (p.get("doi") or "").lower() not in pmc_dois]
-    console.print(f"medRxiv: {len(medrxiv_papers)} candidates, {len(new_medrxiv)} unique after dedupe")
-    with out_path.open("a", encoding="utf-8") as f:
-        for p in new_medrxiv:
-            if p.get("abstract"):
-                f.write(json.dumps(p) + "\n")
+    console.print(f"[dim]Sources: {sources_breakdown}[/]")
 
     checkpoint.mark_complete()
     console.print("[green]Phase 1 complete.[/]")
