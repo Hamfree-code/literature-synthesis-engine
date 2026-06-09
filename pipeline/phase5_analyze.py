@@ -1,5 +1,7 @@
 """Phase 5: Cross-analysis — calibration layer + consensus + Sonnet synthesis (v2)."""
+
 from __future__ import annotations
+
 # __APP_PATHS_INSTALLED__
 from app_paths import app_data, resource
 
@@ -29,6 +31,7 @@ HETEROGENEITY_PROMPT = resource("config/prompts/heterogeneity_analysis.txt").rea
 # (QUADAS filter, random-effects pooling, leave-one-out, publication bias)
 # ============================================================
 
+
 def _fisher_z(r: float) -> float:
     """Fisher z transform of a correlation coefficient."""
     r = max(-0.9999, min(0.9999, r))
@@ -40,10 +43,20 @@ def _inverse_z(z: float) -> float:
     return (e2z - 1) / (e2z + 1)
 
 
-def _pool_random_effects(effects: list[float], variances: list[float]) -> dict:
-    """Random-effects pooling via inverse-variance weighting with DerSimonian–Laird tau²."""
+def _pool_random_effects_legacy(effects: list[float], variances: list[float]) -> dict:
+    """Pure-numpy DerSimonian–Laird pooling (legacy; retained for fallback and
+    the dual-run diff in P3)."""
     if not effects:
-        return {"pooled": None, "se": None, "ci_low": None, "ci_high": None, "i_squared": None, "q": None, "tau_squared": None, "n_studies": 0}
+        return {
+            "pooled": None,
+            "se": None,
+            "ci_low": None,
+            "ci_high": None,
+            "i_squared": None,
+            "q": None,
+            "tau_squared": None,
+            "n_studies": 0,
+        }
     eff = np.array(effects, dtype=float)
     var = np.array(variances, dtype=float)
     var = np.where(var <= 0, 1e-6, var)
@@ -55,7 +68,7 @@ def _pool_random_effects(effects: list[float], variances: list[float]) -> dict:
         tau2 = 0.0
         i2 = 0.0
     else:
-        c = np.sum(w_fe) - np.sum(w_fe ** 2) / np.sum(w_fe)
+        c = np.sum(w_fe) - np.sum(w_fe**2) / np.sum(w_fe)
         tau2 = max(0.0, (q - df) / c) if c > 0 else 0.0
         i2 = max(0.0, (q - df) / q) * 100.0 if q > 0 else 0.0
     w_re = 1.0 / (var + tau2)
@@ -71,7 +84,42 @@ def _pool_random_effects(effects: list[float], variances: list[float]) -> dict:
         "tau_squared": float(tau2),
         "n_studies": len(eff),
         "weights_re": w_re.tolist(),
+        "estimator": "legacy_numpy",
     }
+
+
+# Accumulates per-factor (legacy vs reference) deltas when STATS_DUAL_RUN is on.
+_STATS_DIFF_LOG: list[dict] = []
+
+
+def _pool_random_effects(effects: list[float], variances: list[float]) -> dict:
+    """Random-effects pooling. UPGRADE v3.1 — P3: uses the PyMARE/statsmodels
+    reference estimator when settings.STATS_REFERENCE_IMPL, falling back to the
+    legacy numpy implementation if the libraries are unavailable. When
+    STATS_DUAL_RUN is on, both are computed and their delta logged."""
+    legacy = _pool_random_effects_legacy(effects, variances)
+    if not settings.STATS_REFERENCE_IMPL or not effects:
+        return legacy
+
+    from utils.meta_stats import pool_random_effects_reference
+
+    ref = pool_random_effects_reference(effects, variances)
+    if ref is None:
+        return legacy  # libraries missing → graceful fallback
+
+    if settings.STATS_DUAL_RUN and legacy.get("pooled") is not None and ref.get("pooled"):
+        denom = max(abs(legacy["pooled"]), 1e-6)
+        _STATS_DIFF_LOG.append(
+            {
+                "n_studies": ref["n_studies"],
+                "legacy_pooled": legacy["pooled"],
+                "reference_pooled": ref["pooled"],
+                "rel_diff_pct": round(100 * abs(ref["pooled"] - legacy["pooled"]) / denom, 3),
+                "legacy_tau2": legacy["tau_squared"],
+                "reference_tau2": ref["tau_squared"],
+            }
+        )
+    return ref
 
 
 def select_model(i_squared: float | None) -> str:
@@ -91,14 +139,19 @@ def leave_one_out_analysis(effects: list[float], variances: list[float], paper_i
     """For each study, re-pool excluding it. Flag papers that shift the pooled estimate ≥ threshold."""
     full = _pool_random_effects(effects, variances)
     if full["pooled"] is None or len(effects) < 3:
-        return {"stable": True, "influential_papers": [], "range_without_influential": None, "full_pooled": full["pooled"]}
+        return {
+            "stable": True,
+            "influential_papers": [],
+            "range_without_influential": None,
+            "full_pooled": full["pooled"],
+        }
     pooled = full["pooled"]
     threshold = settings.LEAVE_ONE_OUT_INFLUENCE_THRESHOLD
     influential: list[str] = []
     excluded_pooled_values: list[float] = []
     for i, pid in enumerate(paper_ids):
-        sub_eff = effects[:i] + effects[i + 1:]
-        sub_var = variances[:i] + variances[i + 1:]
+        sub_eff = effects[:i] + effects[i + 1 :]
+        sub_var = variances[:i] + variances[i + 1 :]
         res = _pool_random_effects(sub_eff, sub_var)
         if res["pooled"] is None:
             continue
@@ -115,7 +168,9 @@ def leave_one_out_analysis(effects: list[float], variances: list[float], paper_i
     return {
         "stable": len(influential) == 0,
         "influential_papers": influential,
-        "range_without_influential": [min(excluded_pooled_values), max(excluded_pooled_values)] if excluded_pooled_values else None,
+        "range_without_influential": [min(excluded_pooled_values), max(excluded_pooled_values)]
+        if excluded_pooled_values
+        else None,
         "full_pooled": pooled,
         "adjusted_pooled": adjusted["pooled"] if adjusted else None,
     }
@@ -136,24 +191,38 @@ def assess_publication_bias(effects: list[float], variances: list[float]) -> dic
     eff = np.array(effects, dtype=float)
     var = np.array(variances, dtype=float)
     se = np.sqrt(var)
-    # Egger's regression: regress standardized effect on precision (1/SE) — approximate
-    precision = 1.0 / np.where(se <= 0, 1e-6, se)
-    standardized = eff / np.where(se <= 0, 1e-6, se)
-    # Simple OLS slope + intercept
-    x_mean = float(np.mean(precision))
-    y_mean = float(np.mean(standardized))
-    cov_xy = float(np.mean((precision - x_mean) * (standardized - y_mean)))
-    var_x = float(np.mean((precision - x_mean) ** 2))
-    slope = cov_xy / var_x if var_x > 0 else 0.0
-    intercept = y_mean - slope * x_mean
-    # Egger's p approximated from t-stat on intercept
-    residuals = standardized - (slope * precision + intercept)
-    s2 = float(np.sum(residuals ** 2) / max(1, n - 2))
-    se_intercept = float(np.sqrt(s2 * (1.0 / n + (x_mean ** 2) / (n * var_x)))) if var_x > 0 else float("inf")
-    t_stat = intercept / se_intercept if se_intercept > 0 else 0.0
-    # Two-sided p from normal approximation (n usually ≥ 10)
-    from math import erf, sqrt
-    p_value = 2.0 * (1.0 - 0.5 * (1.0 + erf(abs(t_stat) / sqrt(2))))
+
+    # Egger's regression. UPGRADE v3.1 — P3: prefer the statsmodels reference
+    # (proper t-distribution p-value); fall back to the numpy approximation.
+    intercept = 0.0
+    p_value = 1.0
+    used_reference = False
+    if settings.STATS_REFERENCE_IMPL:
+        from utils.meta_stats import egger_test_reference
+
+        ref = egger_test_reference(effects, variances)
+        if ref is not None:
+            intercept = ref["egger_intercept"]
+            p_value = ref["egger_p"]
+            used_reference = True
+    if not used_reference:
+        precision = 1.0 / np.where(se <= 0, 1e-6, se)
+        standardized = eff / np.where(se <= 0, 1e-6, se)
+        x_mean = float(np.mean(precision))
+        y_mean = float(np.mean(standardized))
+        cov_xy = float(np.mean((precision - x_mean) * (standardized - y_mean)))
+        var_x = float(np.mean((precision - x_mean) ** 2))
+        slope = cov_xy / var_x if var_x > 0 else 0.0
+        intercept = y_mean - slope * x_mean
+        residuals = standardized - (slope * precision + intercept)
+        s2 = float(np.sum(residuals**2) / max(1, n - 2))
+        se_intercept = (
+            float(np.sqrt(s2 * (1.0 / n + (x_mean**2) / (n * var_x)))) if var_x > 0 else float("inf")
+        )
+        t_stat = intercept / se_intercept if se_intercept > 0 else 0.0
+        from math import erf, sqrt
+
+        p_value = 2.0 * (1.0 - 0.5 * (1.0 + erf(abs(t_stat) / sqrt(2))))
     # Funnel symmetry classification
     if p_value < 0.05 and abs(intercept) > 0.5:
         symmetry = "asymmetric"
@@ -208,15 +277,19 @@ def collect_quadas_scores(deep_path: Path) -> list[dict]:
                 qa.get("quadas_flow_timing") or {},
                 qa.get("quadas_reporting") or {},
             ]
-            total = sum(
-                v for blk in subblocks for v in blk.values() if isinstance(v, (int, float))
-            ) if any(subblocks) else None
-        out.append({
-            "paper_id": d.get("paper_id"),
-            "quadas_total": int(total) if total is not None else None,
-            "acceptable": (int(total) > settings.QUADAS_CUTOFF) if total is not None else None,
-            "raw": qa,
-        })
+            total = (
+                sum(v for blk in subblocks for v in blk.values() if isinstance(v, (int, float)))
+                if any(subblocks)
+                else None
+            )
+        out.append(
+            {
+                "paper_id": d.get("paper_id"),
+                "quadas_total": int(total) if total is not None else None,
+                "acceptable": (int(total) > settings.QUADAS_CUTOFF) if total is not None else None,
+                "raw": qa,
+            }
+        )
     return out
 
 
@@ -239,15 +312,17 @@ def collect_effect_sizes(deep_path: Path) -> list[dict]:
                 r = float(r)
             except (TypeError, ValueError):
                 continue
-            var = ((1 - r ** 2) ** 2) / max(1, n - 1)
-            out.append({
-                "paper_id": pid,
-                "factor": str(factor),
-                "r": r,
-                "variance": var,
-                "n": n,
-                "magnitude": es.get("magnitude"),
-            })
+            var = ((1 - r**2) ** 2) / max(1, n - 1)
+            out.append(
+                {
+                    "paper_id": pid,
+                    "factor": str(factor),
+                    "r": r,
+                    "variance": var,
+                    "n": n,
+                    "magnitude": es.get("magnitude"),
+                }
+            )
     return out
 
 
@@ -294,7 +369,9 @@ def meta_analyze_by_factor(effect_rows: list[dict], qaccept_ids: set[str] | None
     return results
 
 
-def heterogeneity_critical_synthesis(factor: str, factor_result: dict, moderators_by_paper: dict[str, dict]) -> dict:
+def heterogeneity_critical_synthesis(
+    factor: str, factor_result: dict, moderators_by_paper: dict[str, dict]
+) -> dict:
     """Call Sonnet for moderator analysis when I² ≥ 90%."""
     pool = factor_result["pooled"]
     studies = factor_result["per_study"]
@@ -303,11 +380,17 @@ def heterogeneity_critical_synthesis(factor: str, factor_result: dict, moderator
     payload = []
     for s in studies:
         m = moderators_by_paper.get(s["paper_id"], {})
-        payload.append({"paper_id": s["paper_id"], "r": s["r"], "n": s["n"], **{k: v for k, v in m.items() if k != "paper_id"}})
+        payload.append(
+            {
+                "paper_id": s["paper_id"],
+                "r": s["r"],
+                "n": s["n"],
+                **{k: v for k, v in m.items() if k != "paper_id"},
+            }
+        )
 
     prompt = (
-        HETEROGENEITY_PROMPT
-        .replace("{i_squared}", f"{pool['i_squared']:.1f}")
+        HETEROGENEITY_PROMPT.replace("{i_squared}", f"{pool['i_squared']:.1f}")
         .replace("{outcome}", factor)
         .replace("{n_studies}", str(len(studies)))
         .replace("{moderators_json}", json.dumps(payload, indent=2))
@@ -325,7 +408,7 @@ def heterogeneity_critical_synthesis(factor: str, factor_result: dict, moderator
             start = raw.find("{")
             end = raw.rfind("}")
             if start >= 0 and end > start:
-                return json.loads(raw[start:end + 1])
+                return json.loads(raw[start : end + 1])
             return {"_parse_failed": True, "_raw": raw[:500]}
     except Exception as e:
         return {"_error": f"{type(e).__name__}: {e}"}
@@ -352,7 +435,9 @@ def forest_plot_text(factor: str, factor_result: dict) -> str:
         lo = s["r"] - 1.96 * np.sqrt(s["variance"])
         hi = s["r"] + 1.96 * np.sqrt(s["variance"])
         pct = 100.0 * w / total_w
-        lines.append(f"{star}{pid_short:<26} {s['n']:>6} {s['r']:>8.3f}   [{lo:>5.2f}, {hi:>5.2f}]   {pct:>6.1f}%")
+        lines.append(
+            f"{star}{pid_short:<26} {s['n']:>6} {s['r']:>8.3f}   [{lo:>5.2f}, {hi:>5.2f}]   {pct:>6.1f}%"
+        )
     lines.append("─" * 75)
     lines.append(
         f"{'POOLED (RE)':<28} {pool['n_studies']:>6} {pool['pooled']:>8.3f}   "
@@ -365,7 +450,9 @@ def forest_plot_text(factor: str, factor_result: dict) -> str:
     )
     lines.append("Model: Random effects, inverse variance method (DerSimonian–Laird)")
     if influential:
-        lines.append(f"★ = Influential study (leave-one-out shifts pooled by ≥{int(settings.LEAVE_ONE_OUT_INFLUENCE_THRESHOLD * 100)}%)")
+        lines.append(
+            f"★ = Influential study (leave-one-out shifts pooled by ≥{int(settings.LEAVE_ONE_OUT_INFLUENCE_THRESHOLD * 100)}%)"
+        )
     lines.append("WARNING: I² ≥ 90% — interpret pooled estimate with caution. See moderator analysis below.")
     lines.append("═" * max(70, len(title)))
     return "\n".join(lines)
@@ -398,14 +485,17 @@ def compute_symptom_consensus(triage_path: Path) -> dict:
             total += 1
             for s in syms:
                 counts[s.lower().strip()] += 1
-    return {s: {"count": c, "pct": round(c / total * 100, 1) if total else 0} for s, c in counts.most_common(30)}
+    return {
+        s: {"count": c, "pct": round(c / total * 100, 1) if total else 0} for s, c in counts.most_common(30)
+    }
 
 
 def compute_definition_heterogeneity(triage_path: Path) -> dict:
     w: Counter[int] = Counter()
     for line in triage_path.open(encoding="utf-8"):
         data = json.loads(line)
-        val = data.get("long_covid_definition_weeks")
+        # P7: topic-neutral key with legacy fallback.
+        val = data.get("definition_threshold_weeks", data.get("long_covid_definition_weeks"))
         if val is not None:
             w[val] += 1
     return dict(w.most_common())
@@ -516,7 +606,14 @@ def propagate_uncertainty(deep_extractions: list[dict]) -> dict:
             consensus = CalibratedCertainty.SPECULATIVE
 
         prefix = CERTAINTY_LANGUAGE[consensus]
-        statement = f"{prefix} that {symptom} is a Long COVID manifestation (extraction confidence: {mean_conf:.2f}, n={n})."
+        # F2: topic-neutral phrasing — never hardcode "Long COVID" into a report
+        # that may be about Fibromyalgia, Narcolepsy, etc.
+        from utils.run_context import topic_title
+
+        statement = (
+            f"{prefix} that {symptom} is a {topic_title()} manifestation "
+            f"(extraction confidence: {mean_conf:.2f}, n={n})."
+        )
 
         results[symptom] = {
             "n_papers": n,
@@ -599,15 +696,18 @@ def call_synthesizer(aggregates: dict, deep_path: Path, triage_path: Path) -> di
     agg_slim = _slim_aggregates(aggregates)
 
     from utils.run_context import topic_title, topic_lower
+
     prompt = (
-        SYNTHESIS_PROMPT
-        .replace("{topic_title}", topic_title())
+        SYNTHESIS_PROMPT.replace("{topic_title}", topic_title())
         .replace("{topic}", topic_lower())
         .replace("{n_papers}", str(len(triage_full)))
         .replace("{n_deep}", str(len(deep_full)))
         .replace("{aggregates}", json.dumps(agg_slim, indent=2))
         .replace("{deep_extractions}", json.dumps(deep_slim, indent=2))
-        .replace("{triage_extractions}", "(triage row-level data omitted; see aggregates.consensus / definition_heterogeneity / study_designs for triage-derived stats)")
+        .replace(
+            "{triage_extractions}",
+            "(triage row-level data omitted; see aggregates.consensus / definition_heterogeneity / study_designs for triage-derived stats)",
+        )
     )
 
     console.print(f"Calling Sonnet for synthesis ({len(prompt)} chars input)...")
@@ -617,7 +717,9 @@ def call_synthesizer(aggregates: dict, deep_path: Path, triage_path: Path) -> di
         messages=[{"role": "user", "content": prompt}],
     )
     raw = response.content[0].text
-    console.print(f"Synthesis tokens: input={response.usage.input_tokens}, output={response.usage.output_tokens}, stop_reason={response.stop_reason}")
+    console.print(
+        f"Synthesis tokens: input={response.usage.input_tokens}, output={response.usage.output_tokens}, stop_reason={response.stop_reason}"
+    )
 
     raw_path = app_data("data/filtered/synthesis_raw.txt")
     raw_path.write_text(raw, encoding="utf-8")
@@ -630,7 +732,7 @@ def call_synthesizer(aggregates: dict, deep_path: Path, triage_path: Path) -> di
         end = raw.rfind("}")
         if start >= 0 and end > start:
             try:
-                return json.loads(raw[start:end + 1])
+                return json.loads(raw[start : end + 1])
             except json.JSONDecodeError as e2:
                 console.print(f"[red]Fallback parse also failed: {e2}. Check synthesis_raw.txt[/]")
         return {}
@@ -642,9 +744,9 @@ def call_due_diligence(aggregates: dict, deep_path: Path) -> dict:
     agg_slim = _slim_aggregates(aggregates)
 
     from utils.run_context import topic_title, topic_lower
+
     prompt = (
-        DUE_DILIGENCE_PROMPT
-        .replace("{topic_title}", topic_title())
+        DUE_DILIGENCE_PROMPT.replace("{topic_title}", topic_title())
         .replace("{topic}", topic_lower())
         .replace("{n_deep}", str(len(deep_full)))
         .replace("{aggregates}", json.dumps(agg_slim, indent=2))
@@ -658,7 +760,9 @@ def call_due_diligence(aggregates: dict, deep_path: Path) -> dict:
         messages=[{"role": "user", "content": prompt}],
     )
     raw = response.content[0].text
-    console.print(f"Due diligence tokens: input={response.usage.input_tokens}, output={response.usage.output_tokens}, stop_reason={response.stop_reason}")
+    console.print(
+        f"Due diligence tokens: input={response.usage.input_tokens}, output={response.usage.output_tokens}, stop_reason={response.stop_reason}"
+    )
 
     app_data("data/filtered/due_diligence_raw.txt").write_text(raw, encoding="utf-8")
 
@@ -670,7 +774,7 @@ def call_due_diligence(aggregates: dict, deep_path: Path) -> dict:
         end = raw.rfind("}")
         if start >= 0 and end > start:
             try:
-                return json.loads(raw[start:end + 1])
+                return json.loads(raw[start : end + 1])
             except json.JSONDecodeError as e2:
                 console.print(f"[red]Due diligence fallback parse failed: {e2}[/]")
         return {}
@@ -683,9 +787,9 @@ def call_executive_summary(aggregates: dict, deep_path: Path) -> dict:
     agg_slim = _slim_aggregates(aggregates)
 
     from utils.run_context import topic_title, topic_lower
+
     prompt = (
-        EXECUTIVE_SUMMARY_PROMPT
-        .replace("{topic_title}", topic_title())
+        EXECUTIVE_SUMMARY_PROMPT.replace("{topic_title}", topic_title())
         .replace("{topic}", topic_lower())
         .replace("{n_deep}", str(len(deep_full)))
         .replace("{aggregates}", json.dumps(agg_slim, indent=2))
@@ -703,7 +807,9 @@ def call_executive_summary(aggregates: dict, deep_path: Path) -> dict:
         console.print(f"[red]Executive summary call failed: {type(e).__name__}: {e}[/]")
         return {"_error": f"{type(e).__name__}: {e}"}
     raw = response.content[0].text
-    console.print(f"Exec summary tokens: input={response.usage.input_tokens}, output={response.usage.output_tokens}, stop_reason={response.stop_reason}")
+    console.print(
+        f"Exec summary tokens: input={response.usage.input_tokens}, output={response.usage.output_tokens}, stop_reason={response.stop_reason}"
+    )
 
     app_data("data/filtered/executive_summary_raw.txt").write_text(raw, encoding="utf-8")
 
@@ -715,7 +821,7 @@ def call_executive_summary(aggregates: dict, deep_path: Path) -> dict:
         end = raw.rfind("}")
         if start >= 0 and end > start:
             try:
-                return json.loads(raw[start:end + 1])
+                return json.loads(raw[start : end + 1])
             except json.JSONDecodeError as e2:
                 console.print(f"[red]Exec summary fallback parse failed: {e2}[/]")
         return {"_parse_failed": True}
@@ -781,8 +887,18 @@ def run() -> None:
             "cutoff": settings.QUADAS_CUTOFF,
         }
 
-        effect_rows = collect_effect_sizes(deep_path)
-        meta_results = meta_analyze_by_factor(effect_rows, qaccept_ids=quadas_acceptable_ids if quadas_acceptable_ids else None)
+        # P2: drop retracted papers from the quantitative synthesis entirely.
+        retracted_ids = load_retracted_ids()
+        if retracted_ids:
+            console.print(f"[yellow]Excluding {len(retracted_ids)} retracted paper(s) from cross-analysis[/]")
+        aggregates["retracted_excluded"] = sorted(retracted_ids)
+        if quadas_acceptable_ids:
+            quadas_acceptable_ids = quadas_acceptable_ids - retracted_ids
+
+        effect_rows = [r for r in collect_effect_sizes(deep_path) if r["paper_id"] not in retracted_ids]
+        meta_results = meta_analyze_by_factor(
+            effect_rows, qaccept_ids=quadas_acceptable_ids if quadas_acceptable_ids else None
+        )
 
         moderators_per_paper = {m["paper_id"]: m for m in collect_moderators(deep_path)}
         heterogeneity_section: dict[str, dict] = {}
@@ -843,8 +959,53 @@ def run() -> None:
     out.write_text(json.dumps(analysis, indent=2, ensure_ascii=False), encoding="utf-8")
     console.print(f"Analysis saved to {out}")
 
+    _flush_stats_diff()
+
     checkpoint.mark_complete()
     console.print("[green]Phase 5 complete.[/]")
+
+
+def load_retracted_ids() -> set[str]:
+    """P2: paper_ids flagged as retracted (written by Phase 1/4). Excluded from
+    the cross-analysis and listed in the methodology section."""
+    path = app_data("data/filtered/retracted.jsonl")
+    out: set[str] = set()
+    if path.exists():
+        for line in path.open(encoding="utf-8"):
+            try:
+                rec = json.loads(line)
+                if rec.get("paper_id"):
+                    out.add(rec["paper_id"])
+            except json.JSONDecodeError:
+                pass
+    return out
+
+
+def _flush_stats_diff() -> None:
+    """P3: when dual-run is on, write the legacy-vs-reference comparison so a
+    reviewer can confirm the migration did not move point estimates >1%."""
+    if not _STATS_DIFF_LOG:
+        return
+    lines = ["# v3.1 — Statistics migration diff (legacy numpy vs PyMARE/statsmodels)", ""]
+    worst = max((d["rel_diff_pct"] for d in _STATS_DIFF_LOG), default=0.0)
+    lines.append(f"Factors compared: {len(_STATS_DIFF_LOG)} · worst relative diff: {worst:.3f}%")
+    lines.append("")
+    lines.append("| n | legacy pooled | reference pooled | rel diff % | legacy τ² | ref τ² |")
+    lines.append("|---|---|---|---|---|---|")
+    for d in _STATS_DIFF_LOG:
+        lines.append(
+            f"| {d['n_studies']} | {d['legacy_pooled']:.4f} | {d['reference_pooled']:.4f} "
+            f"| {d['rel_diff_pct']:.3f} | {d['legacy_tau2']:.4f} | {d['reference_tau2']:.4f} |"
+        )
+    try:
+        from pathlib import Path as _P
+
+        doc = _P("docs/V31_STATS_DIFF.md")
+        doc.parent.mkdir(parents=True, exist_ok=True)
+        doc.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        console.print(f"[dim]Stats diff written to {doc} (worst {worst:.3f}%)[/]")
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

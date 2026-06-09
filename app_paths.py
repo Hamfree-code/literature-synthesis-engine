@@ -7,6 +7,7 @@ APP_DATA_DIR: where the app writes runtime data (papers.jsonl, checkpoints, repo
               On Windows: %LOCALAPPDATA%\\HamsCoResearch\\LongCovid
               Otherwise: ~/HamsCoResearch/LongCovid
 """
+
 from __future__ import annotations
 
 import os

@@ -13,6 +13,7 @@ UMLS Metathesaurus. They are correct for high-frequency concepts and
 unverified for rare ones. Every CUI is flagged llm_judgment=true in the
 database so downstream consumers know.
 """
+
 from __future__ import annotations
 
 import json

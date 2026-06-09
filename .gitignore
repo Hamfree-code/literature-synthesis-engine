@@ -81,3 +81,10 @@ gen_pdfs.py
 # Generated documentation artefacts
 package/
 docs/FILE_TREE.txt
+
+# v3.1 dev
+.venv/
+.pytest_cache/
+.ruff_cache/
+coverage.xml
+.coverage

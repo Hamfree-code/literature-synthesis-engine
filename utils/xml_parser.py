@@ -21,6 +21,7 @@ Each section is capped at SECTION_MAX_CHARS to avoid blowing up the Sonnet
 context window. Caps are conservative and per-section so the whole paper still
 fits well under the 200K context budget when concatenated.
 """
+
 from __future__ import annotations
 
 from lxml import etree

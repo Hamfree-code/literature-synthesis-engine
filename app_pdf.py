@@ -1,11 +1,12 @@
 """Markdown → PDF using reportlab. Replaces WeasyPrint to avoid GTK3 dependency on Windows."""
+
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
+from reportlab.lib.enums import TA_JUSTIFY, TA_LEFT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
@@ -26,14 +27,69 @@ MUTED = colors.HexColor("#555")
 SOFT = colors.HexColor("#f3f4f6")
 BORDER = colors.HexColor("#cbd5e1")
 
-H1 = ParagraphStyle("H1", parent=_styles["Heading1"], fontName="Helvetica-Bold", fontSize=18, leading=24, spaceBefore=14, spaceAfter=10, textColor=ACCENT)
-H2 = ParagraphStyle("H2", parent=_styles["Heading2"], fontName="Helvetica-Bold", fontSize=13, leading=18, spaceBefore=12, spaceAfter=6, textColor=ACCENT, keepWithNext=True)
-H3 = ParagraphStyle("H3", parent=_styles["Heading3"], fontName="Helvetica-Bold", fontSize=11, leading=15, spaceBefore=8, spaceAfter=4, textColor=colors.HexColor("#374151"), keepWithNext=True)
-BODY = ParagraphStyle("Body", parent=_styles["BodyText"], fontName="Helvetica", fontSize=10.5, leading=15, spaceAfter=8, alignment=TA_JUSTIFY, textColor=DARK)
+H1 = ParagraphStyle(
+    "H1",
+    parent=_styles["Heading1"],
+    fontName="Helvetica-Bold",
+    fontSize=18,
+    leading=24,
+    spaceBefore=14,
+    spaceAfter=10,
+    textColor=ACCENT,
+)
+H2 = ParagraphStyle(
+    "H2",
+    parent=_styles["Heading2"],
+    fontName="Helvetica-Bold",
+    fontSize=13,
+    leading=18,
+    spaceBefore=12,
+    spaceAfter=6,
+    textColor=ACCENT,
+    keepWithNext=True,
+)
+H3 = ParagraphStyle(
+    "H3",
+    parent=_styles["Heading3"],
+    fontName="Helvetica-Bold",
+    fontSize=11,
+    leading=15,
+    spaceBefore=8,
+    spaceAfter=4,
+    textColor=colors.HexColor("#374151"),
+    keepWithNext=True,
+)
+BODY = ParagraphStyle(
+    "Body",
+    parent=_styles["BodyText"],
+    fontName="Helvetica",
+    fontSize=10.5,
+    leading=15,
+    spaceAfter=8,
+    alignment=TA_JUSTIFY,
+    textColor=DARK,
+)
 BODY_LEFT = ParagraphStyle("BodyLeft", parent=BODY, alignment=TA_LEFT)
 SMALL = ParagraphStyle("Small", parent=BODY, fontSize=9, leading=12, textColor=MUTED)
-QUOTE = ParagraphStyle("Quote", parent=BODY, fontName="Helvetica-Oblique", leftIndent=18, rightIndent=18, textColor=MUTED, spaceAfter=8)
-CODE_STYLE = ParagraphStyle("Code", parent=BODY, fontName="Courier", fontSize=9, leading=12, leftIndent=12, backColor=SOFT, borderPadding=4)
+QUOTE = ParagraphStyle(
+    "Quote",
+    parent=BODY,
+    fontName="Helvetica-Oblique",
+    leftIndent=18,
+    rightIndent=18,
+    textColor=MUTED,
+    spaceAfter=8,
+)
+CODE_STYLE = ParagraphStyle(
+    "Code",
+    parent=BODY,
+    fontName="Courier",
+    fontSize=9,
+    leading=12,
+    leftIndent=12,
+    backColor=SOFT,
+    borderPadding=4,
+)
 
 
 def _inline(text: str) -> str:
@@ -53,20 +109,24 @@ def _inline(text: str) -> str:
 
 def _table(rows):
     t = Table(rows, repeatRows=1)
-    t.setStyle(TableStyle([
-        ("FONT", (0, 0), (-1, -1), "Helvetica", 9),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-        ("GRID", (0, 0), (-1, -1), 0.3, BORDER),
-        ("LEFTPADDING", (0, 0), (-1, -1), 6),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, SOFT]),
-        ("BACKGROUND", (0, 0), (-1, 0), ACCENT),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONT", (0, 0), (-1, 0), "Helvetica-Bold", 9),
-    ]))
+    t.setStyle(
+        TableStyle(
+            [
+                ("FONT", (0, 0), (-1, -1), "Helvetica", 9),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+                ("GRID", (0, 0), (-1, -1), 0.3, BORDER),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, SOFT]),
+                ("BACKGROUND", (0, 0), (-1, 0), ACCENT),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONT", (0, 0), (-1, 0), "Helvetica-Bold", 9),
+            ]
+        )
+    )
     return t
 
 
@@ -114,7 +174,14 @@ def _md_to_flowables(md_text: str):
             while i < n and (lines[i].strip().startswith("- ") or lines[i].strip().startswith("* ")):
                 items.append(Paragraph(_inline(lines[i].strip()[2:]), BODY_LEFT))
                 i += 1
-            out.append(ListFlowable([ListItem(p, leftIndent=20) for p in items], bulletType="bullet", leftIndent=12, bulletFontSize=9))
+            out.append(
+                ListFlowable(
+                    [ListItem(p, leftIndent=20) for p in items],
+                    bulletType="bullet",
+                    leftIndent=12,
+                    bulletFontSize=9,
+                )
+            )
         elif s.startswith("> "):
             qlines = []
             while i < n and lines[i].strip().startswith(">"):
@@ -131,7 +198,11 @@ def _md_to_flowables(md_text: str):
             out.append(Paragraph("<br/>".join(b.replace(" ", "&nbsp;") for b in buf), CODE_STYLE))
         else:
             para_lines = []
-            while i < n and lines[i].strip() and not lines[i].lstrip().startswith(("#", "|", "- ", "* ", "> ", "```", "---")):
+            while (
+                i < n
+                and lines[i].strip()
+                and not lines[i].lstrip().startswith(("#", "|", "- ", "* ", "> ", "```", "---"))
+            ):
                 para_lines.append(lines[i].rstrip())
                 i += 1
             text = " ".join(para_lines)

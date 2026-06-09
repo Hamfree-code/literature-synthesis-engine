@@ -1,10 +1,11 @@
 """Phase 4: Persist v2 extractions to Supabase."""
+
 from __future__ import annotations
+
 # __APP_PATHS_INSTALLED__
-from app_paths import app_data, resource
+from app_paths import app_data
 
 import json
-from pathlib import Path
 
 from rich.console import Console
 
@@ -198,6 +199,7 @@ def run() -> None:
     norm_path = app_data("data/filtered/normalized_entities.jsonl")
     if norm_path.exists():
         from utils.supabase_client import sb
+
         rows = []
         for line in norm_path.open(encoding="utf-8"):
             try:
@@ -206,14 +208,16 @@ def run() -> None:
                 continue
             pid = rec.get("paper_id")
             for e in rec.get("entities") or []:
-                rows.append({
-                    "paper_id": pid,
-                    "verbatim_text": e.get("verbatim_text", "")[:500],
-                    "umls_cui": e.get("umls_cui") or None,
-                    "mesh_heading": e.get("mesh_heading") or None,
-                    "entity_type": e.get("entity_type"),
-                    "llm_judgment": bool(e.get("llm_judgment", True)),
-                })
+                rows.append(
+                    {
+                        "paper_id": pid,
+                        "verbatim_text": e.get("verbatim_text", "")[:500],
+                        "umls_cui": e.get("umls_cui") or None,
+                        "mesh_heading": e.get("mesh_heading") or None,
+                        "entity_type": e.get("entity_type"),
+                        "llm_judgment": bool(e.get("llm_judgment", True)),
+                    }
+                )
         if rows:
             try:
                 for i in range(0, len(rows), 200):

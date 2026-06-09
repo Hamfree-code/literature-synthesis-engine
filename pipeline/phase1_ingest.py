@@ -1,12 +1,13 @@
 """Phase 1: Ingest papers from PMC + medRxiv (v2 — no CORD-19)."""
+
 from __future__ import annotations
+
 # __APP_PATHS_INSTALLED__
-from app_paths import app_data, resource
+from app_paths import app_data
 
 import asyncio
 import json
 from datetime import date, timedelta
-from pathlib import Path
 
 import httpx
 from Bio import Entrez
@@ -21,6 +22,7 @@ from utils.checkpointing import Checkpoint
 console = Console()
 Entrez.email = settings.NCBI_EMAIL
 Entrez.api_key = settings.NCBI_API_KEY
+
 
 def expand_search_terms(topic: str) -> list[str]:
     """Single Haiku call to expand a condition into MeSH terms and synonyms.
@@ -49,7 +51,7 @@ def expand_search_terms(topic: str) -> list[str]:
             end = raw.rfind("]")
             if start < 0 or end <= start:
                 raise
-            terms = json.loads(raw[start:end + 1])
+            terms = json.loads(raw[start : end + 1])
         if isinstance(terms, list):
             clean = [t.strip() for t in terms if isinstance(t, str) and t.strip()]
             if clean:
@@ -92,6 +94,7 @@ def build_query(
     if mesh_terms and mesh_terms.strip():
         return f"({base}) AND ({mesh_terms.strip()})"
     return base
+
 
 MEDRXIV_SEARCH_URL = "https://api.biorxiv.org/details/medrxiv"
 
@@ -140,7 +143,13 @@ def parse_pmc_xml(xml: str, pmc_id: str) -> dict | None:
     year = int(year_nodes[0]) if year_nodes else None
 
     authors = []
-    for contrib in root.xpath(".//contrib[@contrib-type='author']"):
+    # P7/F-bug: scope author extraction to the article front and explicitly
+    # exclude any contrib living inside the bibliography (<ref-list>/<back>), so
+    # malformed PMC XML can never bleed citation names into the authors field.
+    author_nodes = root.xpath(
+        ".//contrib[@contrib-type='author'][not(ancestor::ref-list)][not(ancestor::back)]"
+    )
+    for contrib in author_nodes:
         surname = "".join(contrib.xpath(".//surname/text()"))
         given = "".join(contrib.xpath(".//given-names/text()"))
         name = f"{given} {surname}".strip()
@@ -182,6 +191,7 @@ async def fetch_pmc_fulltext(pmc_id: str, client: httpx.AsyncClient) -> str | No
     if not structured:
         return None
     from utils.xml_parser import sections_to_compact_text
+
     compact = sections_to_compact_text(structured)
     return compact or None
 
@@ -206,6 +216,7 @@ async def fetch_pmc_fulltext_structured(pmc_id: str, client: httpx.AsyncClient) 
         return None
 
     from utils.xml_parser import extract_structured_sections
+
     sections = extract_structured_sections(r.content)
     if not any(sections.values()):
         return None
@@ -323,19 +334,21 @@ async def fetch_medrxiv_papers(
                             authors = [a.strip() for a in authors_raw.split(";") if a.strip()]
                         else:
                             authors = [str(authors_raw)]
-                        results.append({
-                            "id": f"medrxiv_{doi.replace('/', '_')}",
-                            "source": "medrxiv",
-                            "title": item.get("title"),
-                            "abstract": item.get("abstract"),
-                            "authors": authors,
-                            "year": int((item.get("date") or "2020")[:4]),
-                            "journal": "medRxiv (preprint)",
-                            "url": f"https://www.medrxiv.org/content/{doi}",
-                            "doi": doi,
-                            "full_text": None,
-                            "pmc_id": None,
-                        })
+                        results.append(
+                            {
+                                "id": f"medrxiv_{doi.replace('/', '_')}",
+                                "source": "medrxiv",
+                                "title": item.get("title"),
+                                "abstract": item.get("abstract"),
+                                "authors": authors,
+                                "year": int((item.get("date") or "2020")[:4]),
+                                "journal": "medRxiv (preprint)",
+                                "url": f"https://www.medrxiv.org/content/{doi}",
+                                "doi": doi,
+                                "full_text": None,
+                                "pmc_id": None,
+                            }
+                        )
 
                 cursor += len(collection)
                 if total_in_interval and cursor >= total_in_interval:
@@ -352,6 +365,7 @@ async def run(max_papers: int = 5000, topic: str | None = None, mesh_terms: str 
     checkpoint = Checkpoint("phase1_ingest")
 
     from utils.run_context import save_run_context
+
     save_run_context(topic, mesh_terms)
 
     if checkpoint.is_complete():

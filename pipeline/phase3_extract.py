@@ -8,19 +8,30 @@ canonical extraction stored downstream. When `settings.ARBITER_ENABLED` is
 false, the pipeline falls back to a single-pass extraction at temp=0.1 for
 cost-conscious runs.
 """
+
 from __future__ import annotations
+
 # __APP_PATHS_INSTALLED__
 from app_paths import app_data, resource
 
 import json
 import re
-from pathlib import Path
 
 from rich.console import Console
 
+from config.extraction_schema import ARBITER_TOOL, EXTRACTION_TOOL
 from config.settings import settings
 from utils.checkpointing import Checkpoint
-from utils.claude_client import parse_json_response, poll_batch, sanitize_custom_id, submit_batch
+from utils.claude_client import (
+    message_output_tokens,
+    message_stop_reason,
+    parse_batch_message,
+    parse_json_response,
+    poll_batch,
+    repair_json_to_schema,
+    sanitize_custom_id,
+    submit_batch,
+)
 
 console = Console()
 
@@ -35,6 +46,7 @@ _FULLTEXT_SENTINEL = "FULL TEXT (structured by section):"
 
 def _topic_substitute(template: str) -> str:
     from utils.run_context import topic_title, topic_lower
+
     return template.replace("{topic_title}", topic_title()).replace("{topic}", topic_lower())
 
 
@@ -47,13 +59,15 @@ def build_triage_request(paper: dict) -> dict:
         "params": {
             "model": settings.ANTHROPIC_HAIKU_MODEL,
             "max_tokens": 1024,
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt_schema, "cache_control": {"type": "ephemeral"}},
-                    {"type": "text", "text": abstract_text},
-                ],
-            }],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt_schema, "cache_control": {"type": "ephemeral"}},
+                        {"type": "text", "text": abstract_text},
+                    ],
+                }
+            ],
         },
     }
 
@@ -66,28 +80,43 @@ def reviewer_custom_id(paper_id: str, suffix: str = "") -> str:
     return base[: 64 - len(suf)] + suf
 
 
-def build_reviewer_request(paper: dict, *, temperature: float, suffix: str) -> dict:
+_COMPRESSION_PREAMBLE = (
+    "COMPRESSION MODE (retry): your previous output was truncated. Limit "
+    "provenance to the 8 most relevant entries and keep probabilistic_summary, "
+    "grade_rationale and critical_notes to <=2 sentences each. Preserve all "
+    "numeric fields.\n\n"
+)
+
+
+def build_reviewer_request(paper: dict, *, temperature: float, suffix: str, compress: bool = False) -> dict:
     """Build a single deep-extraction request for one reviewer at a specific
-    temperature. The prompt schema is shared and prompt-cached so that the
-    second reviewer pays the cached-input rate."""
+    temperature. The prompt schema is shared and prompt-cached so the second
+    reviewer pays the cached-input rate. UPGRADE v3.1 — P1: when
+    settings.EXTRACTION_TOOL_USE, forces the ``submit_extraction`` tool so the
+    model cannot return malformed JSON."""
     prompt = _topic_substitute(EXTRACT_PROMPT)
     prompt_schema = prompt.split(_FULLTEXT_SENTINEL)[0] + _FULLTEXT_SENTINEL
     body = paper.get("full_text") or paper.get("abstract") or ""
-    return {
-        "custom_id": reviewer_custom_id(paper["id"], suffix),
-        "params": {
-            "model": settings.ANTHROPIC_SONNET_MODEL,
-            "max_tokens": 8192,
-            "temperature": temperature,
-            "messages": [{
+    if compress:
+        body = _COMPRESSION_PREAMBLE + body
+    params: dict = {
+        "model": settings.ANTHROPIC_SONNET_MODEL,
+        "max_tokens": settings.DEEP_MAX_TOKENS,
+        "temperature": temperature,
+        "messages": [
+            {
                 "role": "user",
                 "content": [
                     {"type": "text", "text": prompt_schema, "cache_control": {"type": "ephemeral"}},
                     {"type": "text", "text": f"\n{body}"},
                 ],
-            }],
-        },
+            }
+        ],
     }
+    if settings.EXTRACTION_TOOL_USE:
+        params["tools"] = [EXTRACTION_TOOL]
+        params["tool_choice"] = {"type": "tool", "name": EXTRACTION_TOOL["name"]}
+    return {"custom_id": reviewer_custom_id(paper["id"], suffix), "params": params}
 
 
 def build_deep_request(paper: dict) -> dict:
@@ -96,7 +125,7 @@ def build_deep_request(paper: dict) -> dict:
     return build_reviewer_request(paper, temperature=0.1, suffix="")
 
 
-def build_arbiter_request(paper: dict, reviewer_a: dict, reviewer_b: dict) -> dict:
+def build_arbiter_request(paper: dict, reviewer_a: dict, reviewer_b: dict, *, compress: bool = False) -> dict:
     """Build a single arbiter request that reconciles two reviewer outputs.
     The reviewer JSONs are injected as inline text — placeholders must use
     direct string replace (not str.format) because the JSON contains braces."""
@@ -105,15 +134,18 @@ def build_arbiter_request(paper: dict, reviewer_a: dict, reviewer_b: dict) -> di
     prompt = prompt.replace("{reviewer_b_json}", json.dumps(reviewer_b, ensure_ascii=False))
     full_text = paper.get("full_text") or paper.get("abstract") or ""
     prompt = prompt.replace("{full_text}", full_text)
-    return {
-        "custom_id": reviewer_custom_id(paper["id"], "arb"),
-        "params": {
-            "model": settings.ANTHROPIC_SONNET_MODEL,
-            "max_tokens": 8192,
-            "temperature": 0.0,
-            "messages": [{"role": "user", "content": prompt}],
-        },
+    if compress:
+        prompt = _COMPRESSION_PREAMBLE + prompt
+    params: dict = {
+        "model": settings.ANTHROPIC_SONNET_MODEL,
+        "max_tokens": settings.DEEP_MAX_TOKENS,
+        "temperature": 0.0,
+        "messages": [{"role": "user", "content": prompt}],
     }
+    if settings.EXTRACTION_TOOL_USE:
+        params["tools"] = [ARBITER_TOOL]
+        params["tool_choice"] = {"type": "tool", "name": ARBITER_TOOL["name"]}
+    return {"custom_id": reviewer_custom_id(paper["id"], "arb"), "params": params}
 
 
 def run_triage(max_papers: int | None = None) -> None:
@@ -169,7 +201,9 @@ def select_for_deep_analysis(top_n: int = 500) -> list[str]:
     if not triage_path.exists():
         return []
     papers = [json.loads(line) for line in triage_path.open(encoding="utf-8")]
-    papers = [p for p in papers if p.get("is_long_covid_focused")]
+    # P7/F1: prefer the topic-neutral flag, fall back to the legacy COVID name so
+    # both old and new triage outputs select correctly.
+    papers = [p for p in papers if p.get("is_topic_focused", p.get("is_long_covid_focused"))]
     design_weight = {"RCT": 1.0, "cohort": 1.0, "meta_analysis": 1.2}
     papers.sort(
         key=lambda p: (
@@ -202,28 +236,111 @@ def _load_deep_papers(paper_ids: list[str]) -> list[dict]:
     return [papers_by_id[pid] for pid in paper_ids if pid in papers_by_id]
 
 
-def _parse_batch_results(results, cid_to_pid: dict[str, str]) -> tuple[dict[str, dict], list[dict]]:
-    """Parse a list of batch results into (parsed_by_paper_id, failures)."""
+def _tool_name_for(reviewer: str) -> str | None:
+    if not settings.EXTRACTION_TOOL_USE:
+        return None
+    return ARBITER_TOOL["name"] if reviewer == "arb" else EXTRACTION_TOOL["name"]
+
+
+def _parse_one_result(r, paper_id: str, reviewer: str, attempt: int) -> tuple[dict | None, dict, str | None]:
+    """Parse a single batch result. Returns (parsed | None, attempt_record, reason | None).
+
+    reason is one of: None (success), 'api_error', 'max_tokens', 'parse_failed'.
+    UPGRADE v3.1 — P1: prefers the forced tool_use payload; logs stop_reason and
+    output tokens for the extraction_attempts table.
+    """
+    record = {
+        "paper_id": paper_id,
+        "reviewer": reviewer,
+        "attempt": attempt,
+        "stop_reason": None,
+        "tokens_out": None,
+        "parse_ok": False,
+        "detail": "",
+    }
+    if r.result.type != "succeeded":
+        err = getattr(r.result, "error", None)
+        msg = getattr(err, "message", str(err)) if err else f"result.type={r.result.type}"
+        record["detail"] = str(msg)[:300]
+        return None, record, "api_error"
+
+    message = r.result.message
+    record["stop_reason"] = message_stop_reason(message)
+    record["tokens_out"] = message_output_tokens(message)
+    parsed = parse_batch_message(message, _tool_name_for(reviewer))
+
+    if parsed is None and settings.REPAIR_PASS_ENABLED:
+        # Should be unreachable under tool-use; salvage any text before giving up.
+        text_blocks = [
+            getattr(b, "text", "") for b in (message.content or []) if getattr(b, "type", None) == "text"
+        ]
+        if text_blocks:
+            parsed = repair_json_to_schema("\n".join(text_blocks), settings.ANTHROPIC_HAIKU_MODEL)
+            if parsed is not None:
+                record["detail"] = "recovered via repair pass"
+
+    if parsed is None:
+        reason = "max_tokens" if record["stop_reason"] == "max_tokens" else "parse_failed"
+        record["detail"] = record["detail"] or f"stop={record['stop_reason']}"
+        return None, record, reason
+
+    record["parse_ok"] = True
+    return parsed, record, None
+
+
+def _extract_with_retries(
+    papers: list[dict], *, suffix: str, temperature: float
+) -> tuple[dict[str, dict], list[dict], list[dict]]:
+    """Run one reviewer (or single-pass) extraction with max_tokens compression
+    retries. Returns (parsed_by_pid, attempts, failures). UPGRADE v3.1 — P1.2."""
+    pending: dict[str, dict] = {p["id"]: p for p in papers}
     parsed_by_pid: dict[str, dict] = {}
+    attempts: list[dict] = []
     failures: list[dict] = []
-    for r in results:
-        paper_id = cid_to_pid.get(r.custom_id, r.custom_id)
-        if r.result.type != "succeeded":
-            err = getattr(r.result, "error", None)
-            err_msg = getattr(err, "message", str(err)) if err else f"result.type={r.result.type}"
-            failures.append({"paper_id": paper_id, "reason": "api_error", "detail": err_msg[:300]})
-            continue
-        raw_text = r.result.message.content[0].text if r.result.message.content else ""
-        parsed = parse_json_response(raw_text)
-        if not parsed:
-            failures.append({
-                "paper_id": paper_id,
-                "reason": "json_parse_failed",
-                "detail": f"raw len={len(raw_text)} prefix={raw_text[:200]!r}",
-            })
-            continue
-        parsed_by_pid[paper_id] = parsed
-    return parsed_by_pid, failures
+    reviewer = suffix or "single"
+
+    max_attempts = settings.DEEP_MAX_RETRIES + 1
+    for attempt in range(1, max_attempts + 1):
+        if not pending:
+            break
+        compress = attempt > 1
+        cid_to_pid = {reviewer_custom_id(pid, suffix): pid for pid in pending}
+        requests = [
+            build_reviewer_request(p, temperature=temperature, suffix=suffix, compress=compress)
+            for p in pending.values()
+        ]
+        if compress:
+            console.print(f"  [yellow]Compression retry {attempt - 1}: {len(requests)} oversized papers[/]")
+        results = poll_batch(submit_batch(requests))
+
+        next_pending: dict[str, dict] = {}
+        for r in results:
+            pid = cid_to_pid.get(r.custom_id)
+            if pid is None:
+                continue
+            parsed, record, reason = _parse_one_result(r, pid, reviewer, attempt)
+            attempts.append(record)
+            if parsed is not None:
+                parsed_by_pid[pid] = parsed
+            elif reason == "max_tokens" and attempt < max_attempts:
+                next_pending[pid] = pending[pid]
+            else:
+                failures.append({"paper_id": pid, "reason": reason, "detail": record["detail"]})
+        pending = next_pending
+
+    for pid in pending:  # exhausted retries
+        failures.append(
+            {"paper_id": pid, "reason": "max_tokens_exhausted", "detail": "still oversized after retries"}
+        )
+    return parsed_by_pid, attempts, failures
+
+
+def _write_attempts(attempts: list[dict]) -> None:
+    out = app_data("data/filtered/extraction_attempts.jsonl")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w", encoding="utf-8") as f:
+        for a in attempts:
+            f.write(json.dumps(a, ensure_ascii=False) + "\n")
 
 
 def _write_outputs(extractions_by_pid: dict[str, dict], failures: list[dict], n_requested: int) -> None:
@@ -248,8 +365,8 @@ def _write_outputs(extractions_by_pid: dict[str, dict], failures: list[dict], n_
     console.print(
         f"Deep extraction complete: {len(extractions_by_pid)}/{n_requested} extracted "
         f"({len(failures)} failed: "
-        f"{sum(1 for x in failures if x['reason']=='api_error')} API, "
-        f"{sum(1 for x in failures if x['reason']=='json_parse_failed')} JSON parse), "
+        f"{sum(1 for x in failures if x['reason'] == 'api_error')} API, "
+        f"{sum(1 for x in failures if x['reason'] == 'json_parse_failed')} JSON parse), "
         f"{provenance_total} provenance entries (persisted in Phase 4), "
         f"{reconciliations} reconciliations triggered by arbiter"
     )
@@ -257,92 +374,113 @@ def _write_outputs(extractions_by_pid: dict[str, dict], failures: list[dict], n_
 
 def _run_single_pass(deep_papers: list[dict]) -> None:
     """Fallback path when ARBITER_ENABLED is false: one Sonnet call per paper."""
-    cid_to_pid = {reviewer_custom_id(p["id"], ""): p["id"] for p in deep_papers}
-    requests = [build_reviewer_request(p, temperature=0.1, suffix="") for p in deep_papers]
-    console.print(f"  Submitting single-pass batch ({len(requests)} requests)...")
-    batch_id = submit_batch(requests)
-    results = poll_batch(batch_id)
-    parsed, failures = _parse_batch_results(results, cid_to_pid)
+    parsed, attempts, failures = _extract_with_retries(deep_papers, suffix="", temperature=0.1)
+    _write_attempts(attempts)
     _write_outputs(parsed, failures, len(deep_papers))
 
 
 def _run_arbiter_pass(deep_papers: list[dict]) -> None:
-    """Two-step extraction + arbiter (Master Improvement Spec v3.0 — Priority 2.1)."""
-    # ---- Step 1: Reviewers A and B in a single batch (paired) -------------
-    cid_a_to_pid: dict[str, str] = {}
-    cid_b_to_pid: dict[str, str] = {}
-    reviewer_requests = []
-    for p in deep_papers:
-        cid_a = reviewer_custom_id(p["id"], "a")
-        cid_b = reviewer_custom_id(p["id"], "b")
-        cid_a_to_pid[cid_a] = p["id"]
-        cid_b_to_pid[cid_b] = p["id"]
-        reviewer_requests.append(build_reviewer_request(p, temperature=0.1, suffix="a"))
-        reviewer_requests.append(build_reviewer_request(p, temperature=0.3, suffix="b"))
+    """Two-step extraction + arbiter. UPGRADE v3.1 — P1: reviewers A and B run in
+    separate, retry-aware passes (no more double-parse over a shared result list,
+    cf. finding F5), each with max_tokens compression retries."""
+    attempts: list[dict] = []
 
-    console.print(f"  Reviewer pass: submitting {len(reviewer_requests)} requests (A+B per paper)...")
-    reviewer_batch_id = submit_batch(reviewer_requests)
-    reviewer_results = poll_batch(reviewer_batch_id)
-
-    parsed_a, fail_a = _parse_batch_results(reviewer_results, cid_a_to_pid)
-    parsed_b, fail_b = _parse_batch_results(reviewer_results, cid_b_to_pid)
-    # _parse_batch_results was called twice on the same result list — each call
-    # also generates spurious failure entries for the OTHER reviewer's IDs. We
-    # discard those.
-    fail_a = [x for x in fail_a if x["paper_id"] in cid_a_to_pid.values()]
-    fail_b = [x for x in fail_b if x["paper_id"] in cid_b_to_pid.values()]
+    # ---- Step 1: Reviewers A and B (each retry-aware) ---------------------
+    parsed_a, att_a, fail_a = _extract_with_retries(deep_papers, suffix="a", temperature=0.1)
+    parsed_b, att_b, fail_b = _extract_with_retries(deep_papers, suffix="b", temperature=0.3)
+    attempts.extend(att_a)
+    attempts.extend(att_b)
+    fail_a_by_pid = {f["paper_id"]: f for f in fail_a}
+    fail_b_by_pid = {f["paper_id"]: f for f in fail_b}
 
     console.print(
         f"  Reviewer pass complete: A={len(parsed_a)}/{len(deep_papers)}, "
         f"B={len(parsed_b)}/{len(deep_papers)}"
     )
 
-    # ---- Step 2: Arbiter pass for papers where BOTH reviewers succeeded ----
+    # ---- Step 2: Arbiter for papers where BOTH reviewers succeeded --------
     arbiter_ready = [p for p in deep_papers if p["id"] in parsed_a and p["id"] in parsed_b]
     arbiter_skipped: dict[str, dict] = {}
     for p in deep_papers:
-        if p["id"] in parsed_a and p["id"] not in parsed_b:
-            arbiter_skipped[p["id"]] = parsed_a[p["id"]]
-            arbiter_skipped[p["id"]]["reconciliation_triggered"] = False
-            arbiter_skipped[p["id"]]["arbiter_notes"] = "Reviewer B failed; using Reviewer A unilaterally."
-        elif p["id"] in parsed_b and p["id"] not in parsed_a:
-            arbiter_skipped[p["id"]] = parsed_b[p["id"]]
-            arbiter_skipped[p["id"]]["reconciliation_triggered"] = False
-            arbiter_skipped[p["id"]]["arbiter_notes"] = "Reviewer A failed; using Reviewer B unilaterally."
+        pid = p["id"]
+        if pid in parsed_a and pid not in parsed_b:
+            rec = dict(parsed_a[pid])
+            rec["reconciliation_triggered"] = False
+            rec["arbiter_notes"] = "Reviewer B failed; using Reviewer A unilaterally."
+            arbiter_skipped[pid] = rec
+        elif pid in parsed_b and pid not in parsed_a:
+            rec = dict(parsed_b[pid])
+            rec["reconciliation_triggered"] = False
+            rec["arbiter_notes"] = "Reviewer A failed; using Reviewer B unilaterally."
+            arbiter_skipped[pid] = rec
 
+    parsed_arb: dict[str, dict] = {}
+    arb_failures: list[dict] = []
     if arbiter_ready:
-        cid_arb_to_pid = {reviewer_custom_id(p["id"], "arb"): p["id"] for p in arbiter_ready}
-        arbiter_requests = [
-            build_arbiter_request(p, parsed_a[p["id"]], parsed_b[p["id"]])
-            for p in arbiter_ready
-        ]
-        console.print(f"  Arbiter pass: submitting {len(arbiter_requests)} reconciliations...")
-        arb_batch_id = submit_batch(arbiter_requests)
-        arb_results = poll_batch(arb_batch_id)
-        parsed_arb, fail_arb = _parse_batch_results(arb_results, cid_arb_to_pid)
-    else:
-        parsed_arb = {}
-        fail_arb = []
+        pending = {p["id"]: p for p in arbiter_ready}
+        max_attempts = settings.DEEP_MAX_RETRIES + 1
+        for attempt in range(1, max_attempts + 1):
+            if not pending:
+                break
+            compress = attempt > 1
+            cid_to_pid = {reviewer_custom_id(pid, "arb"): pid for pid in pending}
+            requests = [
+                build_arbiter_request(p, parsed_a[p["id"]], parsed_b[p["id"]], compress=compress)
+                for p in pending.values()
+            ]
+            console.print(f"  Arbiter pass: submitting {len(requests)} reconciliations...")
+            results = poll_batch(submit_batch(requests))
+            next_pending: dict[str, dict] = {}
+            for r in results:
+                pid = cid_to_pid.get(r.custom_id)
+                if pid is None:
+                    continue
+                parsed, record, reason = _parse_one_result(r, pid, "arb", attempt)
+                attempts.append(record)
+                if parsed is not None:
+                    parsed_arb[pid] = parsed
+                elif reason == "max_tokens" and attempt < max_attempts:
+                    next_pending[pid] = pending[pid]
+                else:
+                    arb_failures.append(
+                        {"paper_id": pid, "reason": f"arbiter_{reason}", "detail": record["detail"]}
+                    )
+            pending = next_pending
+        for pid in pending:
+            arb_failures.append({"paper_id": pid, "reason": "arbiter_max_tokens_exhausted", "detail": ""})
 
     # ---- Step 3: Aggregate ------------------------------------------------
-    # Preserve reviewer_a_raw / reviewer_b_raw on the arbiter output for audit.
     final_extractions: dict[str, dict] = {}
     for pid, arb in parsed_arb.items():
         arb["reviewer_a_raw"] = parsed_a.get(pid)
         arb["reviewer_b_raw"] = parsed_b.get(pid)
         final_extractions[pid] = arb
     for pid, single in arbiter_skipped.items():
-        final_extractions[pid] = single
+        final_extractions.setdefault(pid, single)
 
-    # Combine failures: a paper that failed BOTH reviewers OR was a single
-    # reviewer success but arbiter failed.
+    # A paper is a true failure only if it ended up in NO final extraction.
     combined_failures: list[dict] = []
-    for f in fail_a:
-        if f["paper_id"] not in parsed_b:
-            combined_failures.append({**f, "reason": f"reviewer_a_{f['reason']}_AND_b_failed"})
-    for f in fail_arb:
-        combined_failures.append({**f, "reason": f"arbiter_{f['reason']}"})
+    for pid in {p["id"] for p in deep_papers}:
+        if pid in final_extractions:
+            continue
+        fa = fail_a_by_pid.get(pid)
+        fb = fail_b_by_pid.get(pid)
+        arb_f = next((f for f in arb_failures if f["paper_id"] == pid), None)
+        if arb_f:
+            combined_failures.append(arb_f)
+        elif fa and fb:
+            combined_failures.append(
+                {
+                    "paper_id": pid,
+                    "reason": f"both_reviewers_failed:{fa['reason']}/{fb['reason']}",
+                    "detail": "",
+                }
+            )
+        elif fa or fb:
+            f = fa or fb
+            combined_failures.append({"paper_id": pid, "reason": f["reason"], "detail": f.get("detail", "")})
 
+    _write_attempts(attempts)
     _write_outputs(final_extractions, combined_failures, len(deep_papers))
 
 
@@ -374,9 +512,7 @@ def _run_umls_normalization() -> None:
                 papers_with_entities += 1
                 total += len(normalized)
                 f.write(json.dumps({"paper_id": pid, "entities": normalized}, ensure_ascii=False) + "\n")
-    console.print(
-        f"UMLS normalization: {total} entities normalised across {papers_with_entities} papers"
-    )
+    console.print(f"UMLS normalization: {total} entities normalised across {papers_with_entities} papers")
 
 
 def run_deep(paper_ids: list[str]) -> None:
@@ -416,6 +552,7 @@ def run(max_deep: int = 500, max_papers: int | None = None) -> None:
     if top_ids:
         from pipeline.phase1_ingest import enrich_with_fulltext
         import asyncio
+
         asyncio.run(enrich_with_fulltext(top_ids))
 
     run_deep(top_ids)

@@ -4,10 +4,10 @@ Phase 1 writes the context at ingest time. Phases 3, 5, 6 read it to
 parameterise prompts and report titles. Survives across runs as long as
 the same checkpoint dir is reused (or until a fresh ingestion overwrites).
 """
+
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from app_paths import app_data
 
@@ -63,7 +63,9 @@ def topic_slug() -> str:
     return out or "research"
 
 
-def clear_stale_state_if_topic_changed(new_topic: str | None, new_mesh: str | None = None) -> tuple[bool, str | None]:
+def clear_stale_state_if_topic_changed(
+    new_topic: str | None, new_mesh: str | None = None
+) -> tuple[bool, str | None]:
     """Wipe checkpoints + raw + filtered when the incoming topic or MeSH differs
     from the previously-stored run context. Same-topic re-runs resume from the
     existing checkpoints; different-topic runs start clean.

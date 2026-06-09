@@ -24,6 +24,7 @@ method, which re-imports the entry-point module in the child. Because our exe
 is bundled, `multiprocessing.freeze_support()` MUST be called at the very start
 of app_server.main() before any pipeline import.
 """
+
 from __future__ import annotations
 
 import multiprocessing
@@ -35,7 +36,7 @@ import bundled_credentials
 
 COST_PER_TRIAGE = 0.003
 COST_PER_DEEP_SINGLE = 0.15
-COST_PER_DEEP_ARBITER = 0.45   # 3x for two reviewers + arbiter
+COST_PER_DEEP_ARBITER = 0.45  # 3x for two reviewers + arbiter
 
 PHASES = [
     ("ingest", "Ingestion — fetching papers from PubMed Central"),
@@ -90,6 +91,7 @@ def execute_industrial_pipeline(
         # Topic-change guard: wipe stale state from a previous run if the
         # topic/mesh has changed.
         from utils.run_context import clear_stale_state_if_topic_changed
+
         wiped, prev_topic = clear_stale_state_if_topic_changed(disease, mesh_terms)
         if wiped:
             _log(q, f"Topic changed (previous: '{prev_topic}'). Cleared stale checkpoints + data.", "warn")
@@ -161,6 +163,7 @@ def execute_industrial_pipeline(
 
         today = date.today().isoformat()
         from utils.run_context import topic_slug as _slug
+
         slug = _slug()
         desktop_pdf = USER_DESKTOP / f"research_{slug}_{today}.pdf"
         archived_pdf = APP_DATA_DIR / "reports" / f"research_{slug}_{today}.pdf"

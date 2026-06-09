@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<article xmlns:xlink="http://www.w3.org/1999/xlink" article-type="research-article">
+  <front>
+    <article-meta>
+      <article-id pub-id-type="pmcid">PMC9000001</article-id>
+      <article-id pub-id-type="doi">10.1234/full.2023.001</article-id>
+      <title-group>
+        <article-title>Cognitive outcomes in a prospective cohort</article-title>
+      </title-group>
+      <contrib-group>
+        <contrib contrib-type="author"><name><surname>Alvarez</surname><given-names>Maria</given-names></name></contrib>
+        <contrib contrib-type="author"><name><surname>Bianchi</surname><given-names>Luca</given-names></name></contrib>
+      </contrib-group>
+      <pub-date><year>2023</year></pub-date>
+      <journal-meta><journal-title>Journal of Evidence</journal-title></journal-meta>
+      <abstract>
+        <p>This prospective cohort assessed cognitive outcomes over twelve weeks in 240 adults.</p>
+      </abstract>
+    </article-meta>
+  </front>
+  <body>
+    <sec sec-type="intro"><title>Introduction</title>
+      <p>Background context for the study question and prior literature.</p>
+    </sec>
+    <sec sec-type="methods"><title>Methods</title>
+      <p>Participants were enrolled consecutively and assessed with a validated instrument MARKER_METHODS.</p>
+    </sec>
+    <sec sec-type="results"><title>Results</title>
+      <p>The primary outcome improved with an odds ratio of 1.8 MARKER_RESULTS.</p>
+    </sec>
+    <sec sec-type="discussion"><title>Discussion</title>
+      <p>Findings should be interpreted with caution given confounding MARKER_DISCUSSION.</p>
+    </sec>
+    <sec sec-type="conclusions"><title>Limitations</title>
+      <p>The single-center design limits generalisability MARKER_LIMITATIONS.</p>
+    </sec>
+  </body>
+  <back>
+    <sec sec-type="COI-statement"><title>Conflicts of interest</title>
+      <p>The authors declare no competing interests MARKER_CONFLICTS.</p>
+    </sec>
+    <ack><title>Funding</title><p>Funded by grant XYZ MARKER_FUNDING.</p></ack>
+    <ref-list>
+      <ref id="R1"><element-citation>
+        <person-group><name><surname>Zzyzx</surname><given-names>Quentin</given-names></name></person-group>
+        <article-title>An unrelated reference about discussion and methods MARKER_BIBLIO</article-title>
+      </element-citation></ref>
+    </ref-list>
+  </back>
+</article>

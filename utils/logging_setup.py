@@ -1,4 +1,5 @@
 """Structured logging with rich console output."""
+
 from __future__ import annotations
 
 import logging

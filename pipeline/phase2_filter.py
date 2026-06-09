@@ -1,7 +1,9 @@
 """Phase 2: ASReview active learning filter."""
+
 from __future__ import annotations
+
 # __APP_PATHS_INSTALLED__
-from app_paths import app_data, resource
+from app_paths import app_data
 
 import json
 from pathlib import Path
@@ -19,13 +21,15 @@ def jsonl_to_asreview_csv(jsonl_path: Path, csv_path: Path) -> None:
     with jsonl_path.open(encoding="utf-8") as f:
         for line in f:
             p = json.loads(line)
-            rows.append({
-                "id": p["id"],
-                "title": p["title"],
-                "abstract": p["abstract"],
-                "authors": ";".join(p.get("authors", [])),
-                "year": p.get("year"),
-            })
+            rows.append(
+                {
+                    "id": p["id"],
+                    "title": p["title"],
+                    "abstract": p["abstract"],
+                    "authors": ";".join(p.get("authors", [])),
+                    "year": p.get("year"),
+                }
+            )
     pd.DataFrame(rows).to_csv(csv_path, index=False)
     console.print(f"Exported {len(rows)} papers to {csv_path}")
 

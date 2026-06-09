@@ -1,12 +1,13 @@
 """Phase 6: Generate Markdown + HTML report with numbered citations."""
+
 from __future__ import annotations
+
 # __APP_PATHS_INSTALLED__
 from app_paths import app_data, resource
 
 import json
 import re
 from datetime import date
-from pathlib import Path
 
 import httpx
 import markdown as md_lib
@@ -87,7 +88,7 @@ def crossref_vancouver(meta: dict, n: int) -> str:
     if len(authors) > 6:
         author_str += ", et al."
 
-    dp = (meta.get("published") or meta.get("published-online") or meta.get("created") or {})
+    dp = meta.get("published") or meta.get("published-online") or meta.get("created") or {}
     year = (dp.get("date-parts") or [[None]])[0][0] or "n.d."
     title = (meta.get("title") or ["Untitled"])[0]
     journal = (meta.get("container-title") or [""])[0] or "Preprint"
@@ -190,8 +191,9 @@ class CitationManager:
 
     def resolve_unresolved_via_crossref(self) -> None:
         """For DOIs not in papers_by_id, try CrossRef API."""
-        unresolved = [d for d in self.ordered_dois
-                      if d not in self.papers_by_id and "/" in d and d.startswith("10.")]
+        unresolved = [
+            d for d in self.ordered_dois if d not in self.papers_by_id and "/" in d and d.startswith("10.")
+        ]
         if not unresolved:
             return
         console.print(f"[dim]Resolving {len(unresolved)} unresolved DOIs via CrossRef...[/]")
@@ -233,7 +235,9 @@ def consensus_badge(_value=None) -> str:
 
 
 def _make_env(citer: "CitationManager") -> Environment:
-    env = Environment(loader=FileSystemLoader(str(resource("templates"))), trim_blocks=True, lstrip_blocks=True)
+    env = Environment(
+        loader=FileSystemLoader(str(resource("templates"))), trim_blocks=True, lstrip_blocks=True
+    )
     env.filters["cite"] = citer.substitute
     env.filters["cite_doi"] = citer.cite_doi
     env.filters["llm"] = llm_badge
@@ -246,12 +250,20 @@ def build_markdown(analysis: dict, papers_by_id: dict[str, dict]) -> tuple[str, 
     synthesis = analysis.get("synthesis") or {}
     aggregates = analysis.get("aggregates") or {}
     n_papers = aggregates.get("n_papers") or analysis.get("meta", {}).get("n_papers", 0)
-    n_deep = sum(1 for _ in (app_data("data/filtered/deep_results.jsonl").open(encoding="utf-8") if app_data("data/filtered/deep_results.jsonl").exists() else []))
+    n_deep = sum(
+        1
+        for _ in (
+            app_data("data/filtered/deep_results.jsonl").open(encoding="utf-8")
+            if app_data("data/filtered/deep_results.jsonl").exists()
+            else []
+        )
+    )
 
     citer = CitationManager(papers_by_id)
     env = _make_env(citer)
 
     from utils.run_context import topic_title
+
     template = env.get_template("report.md.j2")
     md_body = template.render(
         date=date.today().isoformat(),
@@ -278,12 +290,20 @@ def build_due_diligence_markdown(analysis: dict, papers_by_id: dict[str, dict]) 
     dd = analysis.get("due_diligence") or {}
     aggregates = analysis.get("aggregates") or {}
     n_papers = aggregates.get("n_papers") or analysis.get("meta", {}).get("n_papers", 0)
-    n_deep = sum(1 for _ in (app_data("data/filtered/deep_results.jsonl").open(encoding="utf-8") if app_data("data/filtered/deep_results.jsonl").exists() else []))
+    n_deep = sum(
+        1
+        for _ in (
+            app_data("data/filtered/deep_results.jsonl").open(encoding="utf-8")
+            if app_data("data/filtered/deep_results.jsonl").exists()
+            else []
+        )
+    )
 
     citer = CitationManager(papers_by_id)
     env = _make_env(citer)
 
     from utils.run_context import topic_title
+
     template = env.get_template("due_diligence.md.j2")
     md_body = template.render(
         date=date.today().isoformat(),
@@ -309,13 +329,21 @@ def build_executive_summary_markdown(analysis: dict, papers_by_id: dict[str, dic
     exec_data = analysis.get("executive_summary") or {}
     aggregates = analysis.get("aggregates") or {}
     n_papers = aggregates.get("n_papers") or analysis.get("meta", {}).get("n_papers", 0)
-    n_deep = sum(1 for _ in (app_data("data/filtered/deep_results.jsonl").open(encoding="utf-8") if app_data("data/filtered/deep_results.jsonl").exists() else []))
+    n_deep = sum(
+        1
+        for _ in (
+            app_data("data/filtered/deep_results.jsonl").open(encoding="utf-8")
+            if app_data("data/filtered/deep_results.jsonl").exists()
+            else []
+        )
+    )
 
     # No citation manager used — the exec summary deliberately omits citations.
     citer = CitationManager(papers_by_id)  # still passed to keep env consistent
     env = _make_env(citer)
 
     from utils.run_context import topic_title
+
     template = env.get_template("executive_summary.md.j2")
     md_body = template.render(
         date=date.today().isoformat(),
@@ -428,11 +456,13 @@ def run() -> None:
         console.print(f"HTML: {html_out}")
         try:
             from app_pdf import markdown_to_pdf
+
             pdf_out = md_out.with_suffix(".pdf")
             markdown_to_pdf(md_body, pdf_out, title=prefix.replace("_", " ").title())
             console.print(f"PDF: {pdf_out}")
             try:
                 from app_paths import USER_DESKTOP
+
                 desktop_copy = USER_DESKTOP / pdf_out.name
                 desktop_copy.write_bytes(pdf_out.read_bytes())
                 console.print(f"PDF copied to desktop: {desktop_copy}")
@@ -440,9 +470,12 @@ def run() -> None:
                 console.print(f"[yellow]Could not copy PDF to desktop: {e}[/]")
         except Exception as e:
             console.print(f"[yellow]PDF generation failed: {e}[/]")
-        console.print(f"  -> {stats['n_papers']} papers, {stats['n_deep']} deep, {stats['n_citations']} citations")
+        console.print(
+            f"  -> {stats['n_papers']} papers, {stats['n_deep']} deep, {stats['n_citations']} citations"
+        )
 
     from utils.run_context import topic_slug
+
     slug = topic_slug()
 
     md_body, stats = build_markdown(analysis, papers_by_id)

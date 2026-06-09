@@ -1,9 +1,10 @@
 """Resume-from-crash logic via simple marker files."""
-from __future__ import annotations
-# __APP_PATHS_INSTALLED__
-from app_paths import app_data, resource
 
-from pathlib import Path
+from __future__ import annotations
+
+# __APP_PATHS_INSTALLED__
+from app_paths import app_data
+
 
 CHECKPOINT_DIR = app_data("data/checkpoints")
 CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)

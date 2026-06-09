@@ -1,0 +1,79 @@
+{
+  "study_metadata": {
+    "title": "Cognitive outcomes in a prospective cohort",
+    "authors": ["Maria Alvarez", "Luca Bianchi"],
+    "year": 2023,
+    "journal": "Journal of Evidence",
+    "doi": "10.1234/full.2023.001",
+    "design": "prospective_cohort",
+    "sample_size": 240,
+    "population": "adults",
+    "population_description": "community-dwelling adults",
+    "follow_up_weeks": 12,
+    "country": "Italy",
+    "pandemic_era": "omicron"
+  },
+  "factual_extraction": {
+    "long_covid_definition": ">=12 weeks of persistent symptoms",
+    "long_covid_definition_weeks": 12,
+    "definition_source": "WHO_2021",
+    "control_group_present": true,
+    "primary_outcomes": ["cognitive impairment"],
+    "secondary_outcomes": ["fatigue"],
+    "statistical_methods": ["logistic regression"],
+    "symptoms_prevalence": {"fatigue": "0.42", "brain fog": "0.31"},
+    "biomarker_findings": {"crp": "elevated"},
+    "risk_factors_quantified": [
+      {"factor": "female sex", "metric": "OR", "value": 1.8, "ci_low": 1.2, "ci_high": 2.7}
+    ],
+    "key_findings": ["Female sex associated with higher impairment risk"],
+    "vaccination_adjusted": true,
+    "baseline_measurements": false,
+    "funding_source": "grant XYZ",
+    "conflict_of_interest": "none declared"
+  },
+  "methodology_appraisal": {
+    "nos_score": 7,
+    "nos_rationale": "Adequate selection and comparability",
+    "grade_certainty": "Moderate",
+    "grade_rationale": "Observational with consistent effect",
+    "mcid_assessed": false,
+    "limitations_self_reported": ["single center"],
+    "limitations_inferred": ["possible surveillance bias"]
+  },
+  "bias_audit": {
+    "surveillance_bias": true,
+    "selection_bias": false
+  },
+  "phenotype_mapping": {
+    "primary_mechanism": "autonomic_metabolic",
+    "secondary_mechanisms": ["vascular_endothelial"],
+    "phenotype_confidence": 0.6
+  },
+  "calibration": {
+    "extraction_confidence": 0.82,
+    "confidence_flags": [],
+    "calibrated_certainty": "probable",
+    "calibrated_certainty_rationale": "Consistent direction, moderate GRADE",
+    "uncertainty_sources": ["single study"],
+    "probabilistic_summary": "Evidence suggests a probable association."
+  },
+  "provenance": [
+    {"field": "risk_factors_quantified", "claim": "OR 1.8 for female sex", "quote": "the odds ratio was 1.8 (95% CI 1.2-2.7)", "section": "Results", "page": 4, "confidence": 0.9},
+    {"field": "key_findings", "claim": "female sex risk", "quote": "Female participants had higher impairment", "section": "Results", "page": 4, "confidence": 0.85},
+    {"field": "limitations_inferred", "claim": "surveillance bias", "quote": "outcomes were ascertained by self-report", "section": "Discussion", "page": 6, "confidence": 0.7},
+    {"field": "design", "claim": "prospective cohort", "quote": "we conducted a prospective cohort study", "section": "Methods", "page": 2, "confidence": 0.95},
+    {"field": "sample_size", "claim": "n=240", "quote": "a total of 240 adults were enrolled", "section": "Methods", "page": 2, "confidence": 0.95}
+  ],
+  "quality_assessment": {
+    "quadas_total": 15,
+    "quadas_acceptable": true
+  },
+  "effect_sizes_classified": [
+    {"factor": "female sex", "metric_reported": "OR", "value_reported": 1.8, "r_equivalent": 0.31, "magnitude": "moderate"}
+  ],
+  "moderators": {"age_mean": 47.0, "sex_female_pct": 58.0},
+  "estimated_from_figure": false,
+  "abstract_vs_results_conflict": false,
+  "critical_notes": "Reasonable quality observational evidence."
+}

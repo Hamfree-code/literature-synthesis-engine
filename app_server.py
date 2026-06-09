@@ -5,6 +5,7 @@ SEPARATE multiprocessing.Process (not a thread) to keep the Flask event loop
 fully responsive while NumPy / reportlab / Sonnet polling run hot in the
 worker. Communication is via multiprocessing.Queue.
 """
+
 from __future__ import annotations
 
 # CRITICAL ORDER for PyInstaller + Windows multiprocessing 'spawn':
@@ -12,25 +13,26 @@ from __future__ import annotations
 # 2. Credentials must be installed BEFORE any pipeline import in BOTH the
 #    parent and the child (pipeline/runner.py re-installs them at child entry).
 import multiprocessing
+
 multiprocessing.freeze_support()
 
 import bundled_credentials
+
 bundled_credentials.install()
 
 import json
 import os
-import queue as _queue   # std-lib queue, for SSE local buffering only
+import queue as _queue  # std-lib queue, for SSE local buffering only
 import socket
 import time
 import webbrowser
 import threading
-from datetime import date
 from pathlib import Path
 
 from flask import Flask, Response, jsonify, request
 
 import app_paths  # noqa: F401 — side effect: ensures APP_DATA_DIR exists
-from app_paths import APP_DATA_DIR, RESOURCE_DIR, USER_DESKTOP
+from app_paths import RESOURCE_DIR
 from pipeline.runner import PHASES, execute_industrial_pipeline
 
 
@@ -142,15 +144,17 @@ def ping():
 
 @app.route("/status")
 def status():
-    return jsonify({
-        "running": runner.running,
-        "done": runner.done,
-        "error": runner.error,
-        "current_phase": runner.current_phase,
-        "spend": round(runner.spend, 4),
-        "pdf_path": str(runner.pdf_path) if runner.pdf_path else None,
-        "phases": [{"key": k, "label": l} for k, l in PHASES],
-    })
+    return jsonify(
+        {
+            "running": runner.running,
+            "done": runner.done,
+            "error": runner.error,
+            "current_phase": runner.current_phase,
+            "spend": round(runner.spend, 4),
+            "pdf_path": str(runner.pdf_path) if runner.pdf_path else None,
+            "phases": [{"key": k, "label": l} for k, l in PHASES],
+        }
+    )
 
 
 @app.route("/start", methods=["POST"])
@@ -194,10 +198,15 @@ def stream():
                 if time.time() - last_keepalive > 15:
                     yield ": keepalive\n\n"
                     last_keepalive = time.time()
-    return Response(gen(), mimetype="text/event-stream", headers={
-        "Cache-Control": "no-cache",
-        "X-Accel-Buffering": "no",
-    })
+
+    return Response(
+        gen(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.route("/report")
@@ -227,12 +236,14 @@ def _open_browser_delayed(url: str, delay: float = 1.2) -> None:
             webbrowser.open(url)
         except Exception:
             pass
+
     threading.Thread(target=_, daemon=True).start()
 
 
 def main() -> None:
     try:
         import logging
+
         logging.getLogger("werkzeug").setLevel(logging.ERROR)
     except Exception:
         pass

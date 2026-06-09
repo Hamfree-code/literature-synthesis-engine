@@ -1,4 +1,5 @@
 """Supabase client wrapper."""
+
 from __future__ import annotations
 
 from supabase import Client, create_client

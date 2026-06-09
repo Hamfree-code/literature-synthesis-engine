@@ -50,11 +50,18 @@ dependencies = [
     "markdown>=3.5",
     "reportlab>=4.0",
     "rich>=13.0",
+    # v3.1
+    "statsmodels>=0.14",   # P3 — Egger's regression
+    "pymare>=0.0.4",       # P3 — DerSimonian–Laird reference
+    "rapidfuzz>=3.0",      # P2 — UMLS name matching
+    "python-docx>=1.1",    # P6 — editable DOCX deliverable
+    "openpyxl>=3.1",       # P6 — evidence_table.xlsx supplement
+    "pymupdf>=1.24",       # P4 — Unpaywall PDF text extraction
 ]
 
 [project.optional-dependencies]
 build = ["pyinstaller>=6.0"]
-dev = ["ruff>=0.4", "pytest>=8.0"]
+dev = ["ruff>=0.4", "pytest>=8.0", "pytest-mock>=3.10", "respx>=0.21", "pytest-cov>=5.0"]
 
 [project.scripts]
 literature-synthesis-engine = "app_server:main"
@@ -73,3 +80,17 @@ include = ["config*", "pipeline*", "utils*", "templates*"]
 [tool.ruff]
 line-length = 110
 target-version = "py312"
+
+[tool.ruff.lint]
+# Pragmatic for a research codebase: lint real bugs, not stylistic line length
+# (prompts and SQL strings legitimately run long). E402 is ignored because the
+# entry points intentionally install bundled credentials before importing the
+# pipeline (PyInstaller spawn ordering requirement).
+ignore = ["E501", "E741", "E402"]
+
+[tool.pytest.ini_options]
+markers = [
+    "live: end-to-end tests that hit real APIs (Anthropic/NCBI); run manually only",
+]
+testpaths = ["tests"]
+addopts = "-m 'not live'"

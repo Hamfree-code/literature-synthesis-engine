@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<article xmlns:xlink="http://www.w3.org/1999/xlink" article-type="research-article">
+  <front>
+    <article-meta>
+      <article-id pub-id-type="pmcid">PMC9000002</article-id>
+      <article-id pub-id-type="doi">10.1234/messy.2022.002</article-id>
+      <title-group>
+        <article-title>Messy bibliography stress test</article-title>
+      </title-group>
+      <contrib-group>
+        <contrib contrib-type="author"><name><surname>Real</surname><given-names>Author</given-names></name></contrib>
+      </contrib-group>
+      <pub-date><year>2022</year></pub-date>
+      <journal-meta><journal-title>Journal of Edge Cases</journal-title></journal-meta>
+      <abstract><p>An abstract that must be parsed cleanly despite a contaminated bibliography.</p></abstract>
+    </article-meta>
+  </front>
+  <body>
+    <sec sec-type="methods"><title>Methods</title><p>Cohort design with follow-up GOOD_METHODS.</p></sec>
+    <sec sec-type="discussion"><title>Discussion</title><p>Interpretation of the cohort findings GOOD_DISCUSSION.</p></sec>
+  </body>
+  <back>
+    <ref-list>
+      <ref id="R1"><element-citation>
+        <!-- malformed PMC: an author-typed contrib living inside the bibliography -->
+        <contrib contrib-type="author"><name><surname>GhostCitation</surname><given-names>Phantom</given-names></name></contrib>
+        <article-title>Bibliography text mentioning methods and discussion BIBLIO_LEAK</article-title>
+      </element-citation></ref>
+      <ref id="R2"><element-citation>
+        <contrib contrib-type="author"><name><surname>FakeRef</surname><given-names>Spurious</given-names></name></contrib>
+      </element-citation></ref>
+    </ref-list>
+  </back>
+</article>

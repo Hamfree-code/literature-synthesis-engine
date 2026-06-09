@@ -8,16 +8,17 @@ this file at all — `config.settings` reads from `.env` via pydantic-settings.
 This template is the ONLY safe-to-commit version. The real `bundled_credentials.py`
 must NEVER be committed (already covered by `.gitignore`).
 """
+
 import os
 
 CREDS = {
-    "ANTHROPIC_API_KEY": "",                                       # sk-ant-api03-...
+    "ANTHROPIC_API_KEY": "",  # sk-ant-api03-...
     "ANTHROPIC_HAIKU_MODEL": "claude-haiku-4-5-20251001",
     "ANTHROPIC_SONNET_MODEL": "claude-sonnet-4-6",
-    "NCBI_API_KEY": "",                                            # 32-char hex from NCBI account
+    "NCBI_API_KEY": "",  # 32-char hex from NCBI account
     "NCBI_EMAIL": "you@example.com",
     "SUPABASE_URL": "https://YOUR-PROJECT.supabase.co",
-    "SUPABASE_KEY": "",                                            # sb_secret_... (service_role) — never publish
+    "SUPABASE_KEY": "",  # sb_secret_... (service_role) — never publish
     "MAX_PAPERS": "5000",
     "MAX_DEEP_ANALYSIS": "500",
     "BATCH_SIZE": "100",

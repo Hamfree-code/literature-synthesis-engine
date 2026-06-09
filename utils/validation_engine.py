@@ -11,6 +11,7 @@ Computes:
 Reads human ratings from Supabase table `human_ratings` (schema v3) and AI
 ratings from the `extractions` table for the same paper_id × field_name.
 """
+
 from __future__ import annotations
 
 from typing import Iterable
