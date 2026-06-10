@@ -127,3 +127,38 @@ def validate_field(human_ratings: list[dict], ai_ratings: list[dict], field_kind
         "interpretation": interpret_kappa(stat),
         "missing": missing,
     }
+
+
+# Field → kind mapping for the UI Kappa panel (UPGRADE v3.1 — P5.2).
+FIELD_KINDS = {
+    "grade_certainty": "discrete",
+    "nos_score": "continuous",
+    "quadas_total": "continuous",
+    "calibrated_certainty": "discrete",
+    "surveillance_bias": "boolean",
+    "selection_bias": "boolean",
+    "self_report_bias": "boolean",
+}
+
+
+def kappa_panel(human_ratings: list[dict], ai_ratings: list[dict]) -> dict:
+    """Per-variable agreement panel for the UI. Groups human/AI ratings by
+    field_name and computes the appropriate statistic for each.
+
+    human_ratings: rows from human_ratings (paper_id, field_name, rating_value).
+    ai_ratings:    {paper_id, field_name, value} dicts derived from extractions.
+    Returns {field_name: validate_field(...)} plus a coverage summary.
+    """
+    fields = {hr["field_name"] for hr in human_ratings}
+    panel: dict[str, dict] = {}
+    for field in sorted(fields):
+        kind = FIELD_KINDS.get(field, "discrete")
+        h = [hr for hr in human_ratings if hr["field_name"] == field]
+        a = [ar for ar in ai_ratings if ar["field_name"] == field]
+        panel[field] = validate_field(h, a, kind)
+    panel["_summary"] = {
+        "n_fields": len(fields),
+        "n_human_ratings": len(human_ratings),
+        "papers_rated": len({hr["paper_id"] for hr in human_ratings}),
+    }
+    return panel

@@ -209,15 +209,115 @@ def stream():
     )
 
 
+def _open_file_cross_platform(path: str) -> None:
+    """Open a file with the OS default app. UPGRADE v3.1 — F8: os.startfile is
+    Windows-only; degrade gracefully on macOS/Linux so demos don't crash."""
+    import subprocess
+    import sys
+
+    if sys.platform.startswith("win"):
+        os.startfile(path)  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", path])
+    else:
+        subprocess.Popen(["xdg-open", path])
+
+
 @app.route("/report")
 def open_report():
     if runner.pdf_path and Path(runner.pdf_path).exists():
         try:
-            os.startfile(str(runner.pdf_path))  # type: ignore[attr-defined]
+            _open_file_cross_platform(str(runner.pdf_path))
             return jsonify({"ok": True})
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            # Not fatal: the file exists, just couldn't be auto-opened.
+            return jsonify({"ok": True, "path": str(runner.pdf_path), "open_error": str(e)})
     return jsonify({"error": "PDF not ready"}), 404
+
+
+# ── P5 — Run history, exports, Kappa, human-rating input ────────────────────
+@app.route("/runs")
+def list_runs_endpoint():
+    from utils.run_registry import list_runs
+
+    return jsonify({"runs": list_runs()})
+
+
+@app.route("/runs/<run_id>/export.json")
+def export_run_json(run_id: str):
+    from utils.run_registry import get_run
+
+    run = get_run(run_id)
+    if not run:
+        return jsonify({"error": "run not found"}), 404
+    return jsonify(run)
+
+
+@app.route("/runs/<run_id>/extractions.csv")
+def export_run_csv(run_id: str):
+    """Stream extractions for a run as CSV (from Supabase)."""
+    import csv
+    import io
+
+    try:
+        from utils.supabase_client import sb
+
+        res = sb().table("extractions").select("*").eq("run_id", run_id).execute()
+        rows = res.data or []
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    if not rows:
+        return jsonify({"error": "no extractions for run"}), 404
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=sorted({k for r in rows for k in r.keys()}))
+    writer.writeheader()
+    for r in rows:
+        writer.writerow(r)
+    return Response(
+        buf.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=extractions_{run_id}.csv"},
+    )
+
+
+@app.route("/kappa")
+def kappa_endpoint():
+    """Compute the Kappa panel from human_ratings vs the current extractions."""
+    try:
+        from utils.supabase_client import sb
+        from utils.validation_engine import kappa_panel
+
+        human = (sb().table("human_ratings").select("*").execute().data) or []
+        if not human:
+            return jsonify({"panel": {}, "message": "No human ratings yet."})
+        ext = (sb().table("extractions").select("*").execute().data) or []
+        ai_ratings = []
+        for e in ext:
+            pid = e.get("paper_id")
+            for field in ("grade_certainty", "nos_score", "calibrated_certainty"):
+                if e.get(field) is not None:
+                    ai_ratings.append({"paper_id": pid, "field_name": field, "value": e[field]})
+        return jsonify({"panel": kappa_panel(human, ai_ratings)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/ratings", methods=["POST"])
+def add_rating():
+    """Insert one human rating (the only way human_ratings ever fills up)."""
+    data = request.get_json(force=True) or {}
+    required = {"paper_id", "rater_id", "field_name", "field_kind", "rating_value"}
+    if not required <= set(data):
+        return jsonify({"error": f"missing fields: {required - set(data)}"}), 400
+    try:
+        from utils.supabase_client import sb
+
+        sb().table("human_ratings").upsert(
+            {k: data[k] for k in required}, on_conflict="paper_id,rater_id,field_name"
+        ).execute()
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 def _find_free_port(start: int = 7432, attempts: int = 10) -> int:

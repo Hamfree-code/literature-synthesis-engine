@@ -364,7 +364,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Long COVID Research Analysis</title>
+<title>{{ title }}</title>
 <style>
 :root {
   --fg: #1a1a1a;
@@ -410,7 +410,7 @@ code { background: var(--bg-soft); padding: 0.1rem 0.3rem; border-radius: 3px; f
 """
 
 
-def render_html(md_body: str) -> str:
+def render_html(md_body: str, title: str | None = None) -> str:
     html_body = md_lib.markdown(md_body, extensions=["tables", "fenced_code", "toc"])
     # Convert [1], [1,2] in body to superscript styled spans
     html_body = re.sub(r"\[(\d+(?:,\d+)*)\]", r'<sup class="cite-num">[\1]</sup>', html_body)
@@ -418,7 +418,29 @@ def render_html(md_body: str) -> str:
     html_body = html_body.replace("<h2>References</h2>", '<h2>References</h2><div class="bib">')
     if '<div class="bib">' in html_body:
         html_body += "</div>"
-    return HTML_TEMPLATE.replace("{{ content }}", html_body)
+    if title is None:
+        from utils.run_context import topic_title
+
+        title = f"{topic_title()} — Evidence Synthesis"
+    return HTML_TEMPLATE.replace("{{ title }}", title).replace("{{ content }}", html_body)
+
+
+def _inject_enterprise(md_body: str, front_matter: str, appendix: str) -> str:
+    """Insert the QA front-matter after the first H1 and the methods/SoF/legal
+    appendix before the References section (P6)."""
+    lines = md_body.splitlines()
+    insert_at = 0
+    for idx, ln in enumerate(lines):
+        if ln.startswith("# "):
+            insert_at = idx + 1
+            break
+    body = "\n".join(lines[:insert_at] + ["", front_matter, ""] + lines[insert_at:])
+    marker = "\n## References"
+    if marker in body:
+        body = body.replace(marker, "\n" + appendix + "\n" + marker, 1)
+    else:
+        body = body + "\n\n" + appendix
+    return body
 
 
 def run() -> None:
@@ -445,11 +467,26 @@ def run() -> None:
 
     today = date.today().isoformat()
 
-    def write_one(prefix: str, md_body: str, stats: dict) -> None:
+    def write_one(prefix: str, md_body: str, stats: dict, *, docx: bool = False) -> None:
         md_out = app_data(f"reports/{prefix}_{today}.md")
         md_out.parent.mkdir(parents=True, exist_ok=True)
         md_out.write_text(md_body, encoding="utf-8")
         console.print(f"Markdown: {md_out}")
+        if docx:
+            try:
+                from utils.export_docx import markdown_to_docx
+                from utils.run_context import topic_title
+
+                markdown_to_docx(
+                    md_body,
+                    md_out.with_suffix(".docx"),
+                    title=f"{topic_title()} — Evidence Synthesis",
+                    run_id=enterprise.get("run_id", "n/a") if enterprise else "n/a",
+                    search_date=today,
+                )
+                console.print(f"DOCX: {md_out.with_suffix('.docx')}")
+            except Exception as e:
+                console.print(f"[yellow]DOCX generation failed: {e}[/]")
         html = render_html(md_body)
         html_out = md_out.with_suffix(".html")
         html_out.write_text(html, encoding="utf-8")
@@ -474,20 +511,55 @@ def run() -> None:
             f"  -> {stats['n_papers']} papers, {stats['n_deep']} deep, {stats['n_citations']} citations"
         )
 
-    from utils.run_context import topic_slug
+    from utils.run_context import get_run_context, topic_slug
 
     slug = topic_slug()
 
+    # P6: enterprise artefacts (manifest/Run ID, supplement ZIP, QA, PRISMA, SoF).
+    enterprise = None
+    try:
+        from utils import enterprise_report
+
+        ctx = get_run_context()
+        enterprise = enterprise_report.generate(
+            app_data,
+            analysis,
+            papers_by_id,
+            slug=slug,
+            today=today,
+            topic=ctx.get("topic", ""),
+            mesh_terms=ctx.get("mesh_terms"),
+            prompts_dir=resource("config/prompts"),
+            reports_dir=app_data("reports"),
+        )
+        console.print(f"[green]Run ID: {enterprise['run_id']}[/]")
+        console.print(f"Supplement: {enterprise['supplement_zip']}")
+    except Exception as e:
+        console.print(f"[yellow]Enterprise artefact generation failed: {e}[/]")
+
+    fm = enterprise["front_matter"] if enterprise else ""
+    ap = enterprise["appendix"] if enterprise else ""
+
     md_body, stats = build_markdown(analysis, papers_by_id)
-    write_one(f"research_{slug}", md_body, stats)
+    if enterprise:
+        md_body = _inject_enterprise(md_body, fm, ap)
+    write_one(f"research_{slug}", md_body, stats, docx=True)
 
     if analysis.get("due_diligence"):
         dd_md, dd_stats = build_due_diligence_markdown(analysis, papers_by_id)
-        write_one(f"research_{slug}_due_diligence", dd_md, dd_stats)
+        if enterprise:
+            dd_md = _inject_enterprise(dd_md, fm, ap)
+        write_one(f"research_{slug}_due_diligence", dd_md, dd_stats, docx=True)
 
     # Executive summary — always emit, even if Sonnet failed. The template degrades gracefully.
     exec_md, exec_stats = build_executive_summary_markdown(analysis, papers_by_id)
     write_one(f"research_{slug}_executive_summary", exec_md, exec_stats)
+
+    # Executive one-pager (separate C-level deliverable).
+    if enterprise:
+        write_one(
+            f"one_pager_{slug}", enterprise["one_pager_md"], {"n_papers": 0, "n_deep": 0, "n_citations": 0}
+        )
 
     checkpoint.mark_complete()
     console.print("[green]Phase 6 complete.[/]")

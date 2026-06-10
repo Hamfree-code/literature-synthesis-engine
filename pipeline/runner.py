@@ -86,6 +86,7 @@ def execute_industrial_pipeline(
     without the parent's environment override.
     """
     try:
+        _t0 = time.time()
         bundled_credentials.install()
 
         # Topic-change guard: wipe stale state from a previous run if the
@@ -154,6 +155,27 @@ def execute_industrial_pipeline(
         phase5_analyze.run()
         _add_spend(q, total, 0.50)
         _phase_complete(q, 5)
+
+        # P6: freeze measured run stats (cost, runtime, exact queries) for the
+        # reproducibility manifest before reports are generated.
+        try:
+            import json as _json
+
+            from pipeline.phase1_ingest import build_query
+
+            run_stats = {
+                "api_cost_usd": total["spend"],
+                "runtime_seconds": round(time.time() - _t0, 1),
+                "queries_by_source": {
+                    "pubmed": build_query(topic=disease, mesh_terms=mesh_terms),
+                    "openalex": disease,
+                },
+            }
+            stats_path = APP_DATA_DIR / "data" / "raw" / "run_stats.json"
+            stats_path.parent.mkdir(parents=True, exist_ok=True)
+            stats_path.write_text(_json.dumps(run_stats, indent=2), encoding="utf-8")
+        except Exception as e:
+            _log(q, f"Could not write run_stats.json: {e}", "warn")
 
         # Phase 6 — Reports
         _phase_start(q, 6)
