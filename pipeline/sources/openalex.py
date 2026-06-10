@@ -114,15 +114,30 @@ def search_openalex(
         "mailto": mailto or "research@example.com",
     }
 
+    # Circuit breaker (Gemini sprint P2): a flapping OpenAlex trips after a few
+    # failed pages so we stop hammering it; the degradation is surfaced in the
+    # QA sheet via degraded_services, never hidden.
+    from utils.resilience import breaker
+
+    cb = breaker("openalex", failure_threshold=5)
     out: list[dict] = []
     cursor = "*"
     try:
         with httpx.Client(headers=headers, timeout=30) as client:
             while cursor and len(out) < max_results:
-                params = {**params_base, "cursor": cursor}
-                r = client.get(_OPENALEX, params=params)
-                if r.status_code != 200:
+                if not cb.allow():
+                    console.print("[yellow]OpenAlex circuit breaker tripped; stopping discovery[/]")
                     break
+                params = {**params_base, "cursor": cursor}
+                try:
+                    r = client.get(_OPENALEX, params=params)
+                except httpx.HTTPError:
+                    cb.record_failure()
+                    continue
+                if r.status_code != 200:
+                    cb.record_failure()
+                    break
+                cb.record_success()
                 data = r.json()
                 for work in data.get("results") or []:
                     parsed = parse_work(work)

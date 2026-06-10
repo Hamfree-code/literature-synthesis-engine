@@ -80,3 +80,55 @@ def test_dedup_pmc_wins():
     kept = dedup_against(new, existing)
     titles = [p["title"] for p in kept]
     assert titles == ["fresh"]
+
+
+# ── P2 Gemini sprint: circuit breakers on OpenAlex / Unpaywall ──────────────
+import httpx  # noqa: E402
+import pytest  # noqa: E402
+import respx  # noqa: E402
+
+from pipeline.sources import openalex as oa  # noqa: E402
+from pipeline.sources import unpaywall as up  # noqa: E402
+from utils import resilience  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _reset_breakers():
+    resilience.reset_all()
+    yield
+    resilience.reset_all()
+
+
+@respx.mock
+def test_openalex_breaker_trips_on_repeated_5xx(monkeypatch):
+    monkeypatch.setattr(oa.settings, "OPENALEX_MAILTO", "x@y.z", raising=False)
+    respx.get(url__regex=r".*api\.openalex\.org.*").mock(return_value=httpx.Response(503))
+    out = oa.search_openalex("fibromyalgia", max_results=100)
+    assert out == []
+    assert resilience.breaker("openalex").status()["state"] in ("degraded", "tripped")
+
+
+@respx.mock
+def test_unpaywall_breaker_records_failure(monkeypatch):
+    monkeypatch.setattr(up.settings, "UNPAYWALL_ENABLED", True, raising=False)
+    monkeypatch.setattr(up.settings, "UNPAYWALL_EMAIL", "x@y.z", raising=False)
+    respx.get(url__regex=r".*api\.unpaywall\.org.*").mock(
+        return_value=httpx.Response(200, json={"best_oa_location": {"url_for_pdf": "http://pdf/x.pdf"}})
+    )
+    respx.get("http://pdf/x.pdf").mock(return_value=httpx.Response(500))
+    assert up.fetch_fulltext_via_unpaywall("10.1/x") is None
+    assert resilience.breaker("unpaywall").total_failures >= 1
+
+
+def test_unpaywall_breaker_short_circuits_when_tripped(monkeypatch):
+    monkeypatch.setattr(up.settings, "UNPAYWALL_ENABLED", True, raising=False)
+    cb = resilience.breaker("unpaywall")
+    for _ in range(cb.failure_threshold):
+        cb.record_failure()
+    assert cb.tripped
+    # tripped breaker → returns None without any network call
+    assert up.fetch_fulltext_via_unpaywall("10.1/x") is None
+
+
+def test_extract_pdf_text_handles_garbage():
+    assert up.extract_pdf_text(b"not a pdf") is None

@@ -45,7 +45,12 @@ def best_oa_pdf_url(doi: str, *, email: str = "", client: httpx.Client | None = 
 
 
 def extract_pdf_text(pdf_bytes: bytes) -> str | None:
-    """Extract plain text from PDF bytes via pymupdf. None on failure."""
+    """Extract plain text from PDF bytes via pymupdf. None on failure.
+
+    Uses ``get_text("text", sort=True)`` so two-column biomedical papers are
+    serialised in natural reading order (top-to-bottom within each column)
+    instead of being interleaved horizontally — interleaving corrupts sentences
+    and breaks the literal-quote provenance match (Gemini sprint P3)."""
     try:
         import fitz  # pymupdf
     except Exception:
@@ -56,7 +61,10 @@ def extract_pdf_text(pdf_bytes: bytes) -> str | None:
         return None
     parts: list[str] = []
     for page in doc:
-        parts.append(page.get_text())
+        try:
+            parts.append(page.get_text("text", sort=True))
+        except TypeError:
+            parts.append(page.get_text())  # older pymupdf without sort kwarg
         if sum(len(p) for p in parts) > _MAX_PDF_CHARS:
             break
     doc.close()
@@ -69,8 +77,18 @@ def extract_pdf_text(pdf_bytes: bytes) -> str | None:
 def fetch_fulltext_via_unpaywall(
     doi: str, *, email: str = "", client: httpx.Client | None = None
 ) -> str | None:
-    """End-to-end: resolve the OA PDF and return its extracted text, or None."""
+    """End-to-end: resolve the OA PDF and return its extracted text, or None.
+
+    Guarded by a circuit breaker (Gemini sprint P2): once Unpaywall has failed
+    repeatedly the breaker trips and remaining papers skip the lookup instead of
+    hammering a degraded service; the degradation surfaces in the QA sheet via
+    ``degraded_services``."""
     if not settings.UNPAYWALL_ENABLED:
+        return None
+    from utils.resilience import breaker
+
+    cb = breaker("unpaywall", failure_threshold=5)
+    if not cb.allow():
         return None
     url = best_oa_pdf_url(doi, email=email, client=client)
     if not url:
@@ -80,9 +98,12 @@ def fetch_fulltext_via_unpaywall(
     try:
         r = client.get(url)
         if r.status_code != 200 or not r.content:
+            cb.record_failure()
             return None
+        cb.record_success()
         return extract_pdf_text(r.content)
     except httpx.HTTPError:
+        cb.record_failure()
         return None
     finally:
         if owns:
