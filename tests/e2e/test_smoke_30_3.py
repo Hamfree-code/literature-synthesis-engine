@@ -8,6 +8,7 @@ credentials in the environment:
 It exercises the full pipeline (ingest → triage → enrich → deep → store →
 analyze → report) and asserts the enterprise artefacts were produced.
 """
+
 from __future__ import annotations
 
 import pytest
