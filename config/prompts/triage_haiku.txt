@@ -1,15 +1,15 @@
 You are extracting structured data from a scientific abstract about {topic_title}.
 Return ONLY a valid JSON object. No markdown, no preamble, no trailing text.
 
-In the schema below, "is_long_covid_focused" means: is this paper primarily about {topic_title} (or its established synonyms / related terms)? Use the name verbatim — it is a legacy field key, but its meaning is "topic-focused".
+In the schema below, "is_topic_focused" means: is this paper primarily about {topic_title} (or its established synonyms / related terms)?
 
-Similarly, "long_covid_definition_weeks" means: any temporal threshold or duration criterion the study uses to define {topic_title} (in weeks if applicable, otherwise null).
+"definition_threshold_weeks" means: any temporal threshold or duration criterion the study uses to define {topic_title} (in weeks if applicable, otherwise null).
 
 {
-  "is_long_covid_focused": boolean,
+  "is_topic_focused": boolean,
   "study_design": "RCT" | "cohort" | "case_control" | "cross_sectional" | "case_report" | "review" | "meta_analysis" | "other",
   "sample_size": int | null,
-  "long_covid_definition_weeks": int | null,
+  "definition_threshold_weeks": int | null,
   "main_symptoms": [string],
   "main_biomarkers": [string],
   "risk_factors_identified": [string],

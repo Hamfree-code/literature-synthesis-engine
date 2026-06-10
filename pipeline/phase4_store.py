@@ -30,8 +30,13 @@ def map_triage_to_schema(d: dict) -> dict:
         out["sample_size"] = d["sample_size"]
     if d.get("population_country"):
         out["population"] = d["population_country"]
-    if (weeks := d.get("long_covid_definition_weeks")) is not None:
+    weeks = d.get("definition_threshold_weeks", d.get("long_covid_definition_weeks"))
+    if weeks is not None:
         out["long_covid_definition"] = f">={weeks} weeks"
+        out["definition_threshold_weeks"] = weeks
+    focused = d.get("is_topic_focused", d.get("is_long_covid_focused"))
+    if focused is not None:
+        out["is_topic_focused"] = bool(focused)
     if syms := d.get("main_symptoms"):
         out["symptoms"] = {s: 1 for s in syms}
     if bios := d.get("main_biomarkers"):

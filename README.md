@@ -1,6 +1,6 @@
 # Literature Synthesis Engine
 
-[![Cost](https://img.shields.io/badge/cost%2Frun-%2485--100-blue)]() [![Runtime](https://img.shields.io/badge/runtime-~1h-blue)]() [![Demo corpus](https://img.shields.io/badge/demo-4%2C666%20papers-blue)]() [![Architecture](https://img.shields.io/badge/architecture-v3.0-purple)]() [![License](https://img.shields.io/badge/license-MIT-green)]()
+[![CI](https://github.com/Hamfree-code/literature-synthesis-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/Hamfree-code/literature-synthesis-engine/actions/workflows/ci.yml) [![Coverage](https://img.shields.io/badge/coverage-utils%20%2B%20phase5%20%E2%89%A570%25-brightgreen)]() [![Cost](https://img.shields.io/badge/cost%2Frun-%2485--100-blue)]() [![Architecture](https://img.shields.io/badge/architecture-v3.1-purple)]() [![License](https://img.shields.io/badge/license-MIT-green)]()
 
 An automated pipeline that ingests open-access scientific literature, performs structured methodological extraction with literal-quote provenance, and emits three calibrated reports: a research synthesis, a pharma due-diligence brief, and a non-technical executive summary.
 
@@ -94,7 +94,7 @@ Nothing is asserted without a traceable source. Every numeric or qualitative cla
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-A Phase 2 (ASReview filter) exists in the codebase but is bypassed in the current flow — Phase 3a auto-promotes `papers.jsonl` directly to `relevant_papers.jsonl` when no ASReview output is present.
+Phase 2 (the old ASReview active-learning filter) was removed in v3.1 — the Haiku triage replaced it de facto. Phase 3a promotes `papers.jsonl` directly to `relevant_papers.jsonl`.
 
 ---
 
@@ -104,9 +104,10 @@ The shipped artifact is a self-contained Windows `.exe` (PyInstaller bundle, ~94
 
 1. **Install Python 3.12** (the pipeline pins to `>=3.12,<3.13` because some methodology libs lag on 3.14).
 2. **Clone and install deps** with `uv sync` (or `pip install` the modules listed in `longcovid.spec` under `hiddenimports`).
-3. **Create `.env`** at the repo root with `ANTHROPIC_API_KEY`, `NCBI_API_KEY`, `NCBI_EMAIL`, `SUPABASE_URL`, `SUPABASE_KEY`. A `.env.example` is provided as a template.
-4. **Initialise the Supabase schema** by running `config/schema.sql` followed by `config/schema_v2_migration.sql` in the Supabase SQL editor.
-5. **Run the server**: `python app_server.py`. A browser tab opens at `http://localhost:7432` with the analysis UI; enter a topic, optional MeSH filter, max papers, max deep, and start.
+3. **Create `.env`** at the repo root with `ANTHROPIC_API_KEY`, `NCBI_API_KEY`, `NCBI_EMAIL`, `SUPABASE_URL`, `SUPABASE_KEY`. Optionally add `UMLS_API_KEY` (CUI verification), `OPENALEX_MAILTO` and `UNPAYWALL_EMAIL` (all free). A `.env.example` is provided as a template.
+4. **Initialise the Supabase schema** by running, in order, `config/schema.sql`, `config/schema_v2_migration.sql`, `config/schema_v3_migration.sql`, then `config/schema_v31_migration.sql` in the Supabase SQL editor. (All migrations are additive/idempotent.)
+5. **Run the tests** (optional but recommended): `uv run pytest -m "not live"`.
+6. **Run the server**: `python app_server.py`. A browser tab opens at `http://localhost:7432` with the analysis UI; enter a topic, optional MeSH filter, max papers, max deep, and start.
 
 To rebuild the `.exe`: `pyinstaller --clean --noconfirm longcovid.spec`.
 
@@ -170,12 +171,12 @@ Not yet implemented (in the project's UPGRADE_SPEC backlog): OpenAlex, Unpaywall
 
 - **LLM-generated structured extraction.** Every field in the deep-extraction layer is produced by Claude Sonnet, not human reviewers. The provenance layer enables literal-quote verification, but the schema mapping itself can misread nuance, over-simplify, or — rarely — hallucinate fields. The prompt forces `null` rather than guessing when confidence drops below 0.70, but this is a soft constraint enforced by the model. **v3 mitigation**: two-step extraction with arbiter reconciles disagreements between two independent reviewers; LLM-judgment flagging makes the inference / computation distinction explicit in every output.
 - **QUADAS is double-LLM scored under v3** (two reviewers + arbiter), but not by trained human reviewers with arbitration. Closer to the formal standard than v2, still not the formal standard.
-- **Random-effects pooling, Egger's regression, and trim-and-fill are pure-numpy approximations** of the R `meta` / ProMeta 3 implementations. Adequate for cross-paper signal detection, not adequate for regulatory submission.
-- **UMLS CUI assignments are LLM-generated, not validated against the UMLS REST API.** Accuracy is high for common concepts and unverified for rare ones. Every CUI carries `llm_judgment=true` in the database.
-- **PMC OA full-text only.** Subscription-journal papers and many recent high-impact studies are not retrievable. Coverage was 98.4% on the Long COVID validation top-500 selection — heavily biased toward open-access journals.
-- **medRxiv coverage is client-side filtered**, which is robust but slow. For a 6-year window the pipeline scans up to 26 90-day chunks; non-COVID topics with low match rates may scan thousands of preprints to find tens of matches.
-- **Not a systematic review.** No PRISMA flow, no protocol pre-registration, no external risk-of-bias scoring beyond integrated NOS/GRADE per paper. The output is best understood as *structured cartography* of a literature, not a meta-analytic verdict.
-- **Author / reference parsing from PMC XML is currently imperfect** — bibliography entries occasionally bleed into the `authors` field on cited papers. CrossRef fallback compensates for off-corpus citations; PDF rendering is hardened against the contamination via html-escape (v3 fix).
+- **Meta-analysis uses reference implementations (v3.1):** random-effects pooling via PyMARE (DerSimonian–Laird) and Egger's regression via statsmodels; trim-and-fill is an in-house implementation validated by tests. The legacy pure-numpy path remains as a fallback and is diffed against the reference (<1%) during validation.
+- **UMLS CUIs are verified against the UMLS REST API when `UMLS_API_KEY` is set (v3.1).** Verified entities carry a `[VERIFIED]` badge and `cui_verified=true`; without a key the engine falls back to the LLM CUI with `cui_verified=false`. The methodology section reports the % verified.
+- **Retraction screening (v3.1):** PubMed queries exclude `Retracted Publication[pt]` by default and every deep paper's DOI is cross-checked against Crossref; retracted papers are excluded from the cross-analysis and listed in the methodology.
+- **Multi-source coverage (v3.1):** PMC OA + OpenAlex discovery + Unpaywall OA full-text fallback, deduplicated by DOI. OpenAlex server-side preprint search replaces the slow client-side medRxiv scan (still available behind `MEDRXIV_LEGACY=true`). Open-access bias is reduced but not eliminated.
+- **PRISMA-conformant reporting, not a registered systematic review (v3.1).** The report carries a PRISMA 2020 flow diagram, a reproducibility manifest (verifiable Run ID), a GRADE Summary-of-Findings table, and a machine-readable supplement — but there is no protocol pre-registration and no human dual screening.
+- **Author / reference parsing fix (v3.1):** PMC XML author extraction is scoped to the article front and excludes `<ref-list>`/`<back>`, so bibliography entries no longer bleed into `authors` (regression-tested).
 
 ---
 

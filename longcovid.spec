@@ -47,10 +47,20 @@ a = Analysis(
         'app_paths', 'app_pdf', 'bundled_credentials',
         'utils.run_context', 'utils.claude_client', 'utils.supabase_client',
         'utils.checkpointing', 'utils.logging_setup',
-        'pipeline.phase1_ingest', 'pipeline.phase2_filter', 'pipeline.phase3_extract',
+        'pipeline.phase1_ingest', 'pipeline.phase3_extract',
         'pipeline.phase4_store', 'pipeline.phase5_analyze', 'pipeline.phase6_report',
         'pipeline.runner',
+        # v3.1 multi-source ingest
+        'pipeline.sources', 'pipeline.sources.openalex', 'pipeline.sources.unpaywall',
         'utils.xml_parser', 'utils.umls_normalizer', 'utils.validation_engine',
+        # v3.1 credibility / stats / reporting modules
+        'utils.umls_client', 'utils.retraction', 'utils.meta_stats',
+        'utils.run_manifest', 'utils.export_citations', 'utils.export_docx',
+        'utils.report_builders', 'utils.enterprise_report', 'utils.run_registry',
+        'config.extraction_schema',
+        # v3.1 third-party deps
+        'statsmodels', 'statsmodels.api', 'pymare', 'pymare.estimators',
+        'rapidfuzz', 'docx', 'openpyxl', 'fitz',
         # multiprocessing under PyInstaller spawn
         'multiprocessing', 'multiprocessing.spawn', 'multiprocessing.context',
         'multiprocessing.queues', 'multiprocessing.connection',

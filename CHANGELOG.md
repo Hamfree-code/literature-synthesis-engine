@@ -4,6 +4,44 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.1.0] — 2026-06-10
+
+Implements the UPGRADE v3.1 contract (`docs/V31_MASTER_PLAN.md`). Plan,
+sequencing and the 13 code-grounded findings are documented there.
+
+### Added
+- **Tests + CI (P0):** `tests/` suite (xml parser, Kappa, scoring, run-context,
+  meta-analysis, credibility, sources, reports, mocked phase 3 / phase 6) and a
+  GitHub Actions workflow (ruff + pytest + coverage). 68 tests.
+- **Tool-use deep extraction (P1):** `config/extraction_schema.py` single source
+  of truth; forced `submit_extraction` / `submit_reconciled_extraction` tools;
+  `max_tokens` compression retries; `extraction_attempts` log; Haiku repair pass.
+- **Credibility (P2):** `utils/umls_client.py` (UMLS REST CUI verification, offline
+  fallback, `[VERIFIED]` badge) and `utils/retraction.py` (PubMed filter + Crossref
+  screen; retracted papers excluded from cross-analysis and reported).
+- **Reference statistics (P3):** `utils/meta_stats.py` — PyMARE DerSimonian–Laird
+  and statsmodels Egger, with legacy fallback and a dual-run diff.
+- **Coverage (P4):** `pipeline/sources/` — OpenAlex discovery (server-side preprint
+  search replacing the client-side medRxiv scan) and Unpaywall OA full-text fallback.
+- **Product (P5):** `runs` registry + `/runs`, export, `/kappa` and `/ratings`
+  endpoints; cross-platform report opening.
+- **Enterprise reports (P6):** reproducibility manifest + verifiable Run ID, PRISMA
+  2020 flow, GRADE Summary-of-Findings, QA certificate, executive one-pager,
+  RIS/BibTeX, supplement ZIP (CSV/XLSX/SVG/manifest), and an editable DOCX.
+
+### Changed
+- De-COVID-ised disease-agnostic outputs (consensus statements, definition key,
+  HTML title, selection field) so non-COVID reports never say "Long COVID".
+- README limitations table, setup instructions (now lists all migrations), and
+  CI/coverage badges updated.
+
+### Fixed
+- PMC XML author extraction no longer pulls names from the bibliography (P7).
+- Deep-extraction failure accounting no longer double-parses a shared result list.
+
+### Removed
+- Phase 2 (ASReview) dead code — the Haiku triage replaced it de facto.
+
 ## [3.0.0] — 2026-05-17
 
 Major architectural upgrade per the Master Improvement Spec v3.0
