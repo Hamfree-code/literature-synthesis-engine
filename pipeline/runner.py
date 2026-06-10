@@ -108,7 +108,13 @@ def execute_industrial_pipeline(
             _log(q, f"MeSH terms filter: {mesh_terms}")
         _log(q, f"App data: {APP_DATA_DIR}")
         est = max_papers * COST_PER_TRIAGE + max_deep * per_deep_cost + 0.50
-        _log(q, f"Estimated cost: ${est:.2f} (arbiter={'ON' if settings.ARBITER_ENABLED else 'OFF'})")
+        _log(
+            q,
+            f"Estimated cost: ${est:.2f} (arbiter={'ON' if settings.ARBITER_ENABLED else 'OFF'}). "
+            "This is a FLOOR: full-text (Unpaywall) deep extractions and max_tokens "
+            "compression retries can add ~10-20%. OpenAlex/Unpaywall/UMLS/Crossref are $0. "
+            "The MEASURED cost is recorded in the run manifest.",
+        )
 
         import asyncio
         from pipeline import phase1_ingest, phase3_extract, phase4_store, phase5_analyze, phase6_report

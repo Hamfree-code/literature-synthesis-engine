@@ -192,6 +192,52 @@ def _write_supplement_csvs(app_data, supplement_dir: Path) -> list[Path]:
     return out
 
 
+def ontology_section_markdown(app_data) -> str:
+    """Render the UMLS verification status with honest badges. An entity is
+    tagged [VERIFIED] only when cui_verified is true (real UMLS REST match);
+    everything else is [LLM]. Offline (no key) this correctly shows 0% verified,
+    so the badge never confers credibility the lookup did not earn."""
+    path = app_data("data/filtered/normalized_entities.jsonl")
+    entities: list[dict] = []
+    if path.exists():
+        for line in path.open(encoding="utf-8"):
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            entities.extend(rec.get("entities") or [])
+    total = len(entities)
+    verified = [e for e in entities if e.get("cui_verified")]
+    pct = round(100.0 * len(verified) / total, 1) if total else 0.0
+
+    lines = ["## Ontology Verification (UMLS)", ""]
+    if total == 0:
+        lines.append("_No normalised entities in this run._")
+        return "\n".join(lines)
+    if pct == 0.0:
+        # Honest 0% wording: do not mention a [VERIFIED] badge that nothing earned.
+        lines.append(
+            f"0/{total} CUIs confirmed against the UMLS REST API — **every CUI is "
+            "LLM-inferred** and carries no [VERIFIED] badge. Configure a free UTS "
+            "`UMLS_API_KEY` to enable verification."
+        )
+    else:
+        lines.append(
+            f"{len(verified)}/{total} CUIs ({pct}%) confirmed against the UMLS REST API "
+            "and tagged <sup>[VERIFIED]</sup>; the remainder are LLM-inferred <sup>[LLM]</sup>."
+        )
+    # Show a short verified sample (if any) so the badge is visible in the report.
+    sample = verified[:10]
+    if sample:
+        lines += ["", "| Entity | UMLS preferred name | CUI |", "|---|---|---|"]
+        for e in sample:
+            lines.append(
+                f"| {e.get('verbatim_text', '')} <sup>[VERIFIED]</sup> | "
+                f"{e.get('preferred_name', '')} | {e.get('umls_cui', '')} |"
+            )
+    return "\n".join(lines)
+
+
 def front_matter_markdown(qa: dict, prisma: dict, search_date: str) -> str:
     """Cover banner + QA certificate (the fixed page-2 quality sheet)."""
     parts = [
@@ -209,10 +255,12 @@ def front_matter_markdown(qa: dict, prisma: dict, search_date: str) -> str:
 def appendix_markdown(qa: dict, prisma: dict, analysis: dict, manifest: dict, search_date: str) -> str:
     """GRADE SoF + PRISMA note + methods-in-full + legal page."""
     meta_by_factor = (analysis.get("aggregates") or {}).get("meta_analysis_by_factor") or {}
+    from config.settings import settings
+
     parts = [
         "## GRADE Summary of Findings <sup>[CALC]</sup>",
         "",
-        rb.grade_sof_table(meta_by_factor, min_studies=2),
+        rb.grade_sof_table(meta_by_factor, min_studies=settings.MIN_STUDIES_POOLING),
         "",
         "## PRISMA 2020 Flow",
         "",
@@ -314,7 +362,11 @@ def generate(
         "prisma": prisma,
         "manifest": manifest,
         "front_matter": front_matter_markdown(qa, prisma, today),
-        "appendix": appendix_markdown(qa, prisma, analysis, manifest, today),
+        "appendix": (
+            appendix_markdown(qa, prisma, analysis, manifest, today)
+            + "\n\n"
+            + ontology_section_markdown(app_data)
+        ),
         "one_pager_md": one_pager_md,
         "supplement_zip": str(zip_path),
     }

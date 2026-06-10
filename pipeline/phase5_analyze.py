@@ -351,11 +351,27 @@ def meta_analyze_by_factor(effect_rows: list[dict], qaccept_ids: set[str] | None
 
     results: dict[str, dict] = {}
     for factor, rows in by_factor.items():
-        if len(rows) < 2:
+        n = len(rows)
+        if n < 2:
             continue
         effects = [r["r"] for r in rows]
         variances = [r["variance"] for r in rows]
         paper_ids = [r["paper_id"] for r in rows]
+        # Below the pooling threshold, do NOT report a pooled point estimate —
+        # DL τ² is not defensible on 2 studies. Surface the individual effects so
+        # the signal is not lost, flagged as not-pooled.
+        if n < settings.MIN_STUDIES_POOLING:
+            results[factor] = {
+                "pooled": None,
+                "pooled_skipped": True,
+                "pooled_skipped_reason": (
+                    f"only {n} study(ies); below MIN_STUDIES_POOLING={settings.MIN_STUDIES_POOLING}"
+                ),
+                "model": "insufficient_studies_for_pooling",
+                "per_study": rows,
+                "n_studies": n,
+            }
+            continue
         pool = _pool_random_effects(effects, variances)
         loo = leave_one_out_analysis(effects, variances, paper_ids)
         pub_bias = assess_publication_bias(effects, variances)
@@ -904,6 +920,20 @@ def run() -> None:
         heterogeneity_section: dict[str, dict] = {}
         forest_plots: dict[str, str] = {}
         for factor, fres in meta_results.items():
+            # Sub-threshold factors carry no pooled estimate — record the count
+            # and the individual effects, not a fragile pooled r.
+            if fres.get("pooled_skipped"):
+                heterogeneity_section[factor] = {
+                    "n_studies": fres["n_studies"],
+                    "i_squared": None,
+                    "model": fres["model"],
+                    "pooled_r": None,
+                    "ci": [None, None],
+                    "pooled_skipped": True,
+                    "pooled_skipped_reason": fres["pooled_skipped_reason"],
+                    "per_study_r": [r["r"] for r in fres["per_study"]],
+                }
+                continue
             i2 = (fres["pooled"] or {}).get("i_squared")
             heterogeneity_section[factor] = {
                 "n_studies": fres["pooled"]["n_studies"],

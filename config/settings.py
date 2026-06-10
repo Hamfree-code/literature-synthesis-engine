@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     HETEROGENEITY_MODERATE_THRESHOLD: float = 50.0
     HETEROGENEITY_LOW_THRESHOLD: float = 25.0
     MIN_STUDIES_PUBLICATION_BIAS: int = 10  # Egger's test / trim-and-fill require ≥ this many studies
+    # v3.1: a pooled estimate is only reported when a factor has ≥ this many
+    # studies. DerSimonian–Laird τ² is unstable on 2 studies; below this we list
+    # the individual effects instead of a fragile pooled point estimate.
+    MIN_STUDIES_POOLING: int = 3
     LEAVE_ONE_OUT_INFLUENCE_THRESHOLD: float = 0.10  # 10% change in pooled estimate = influential paper
     EFFECT_SIZE_NEGLIGIBLE: float = 0.10  # r < this = negligible (Cohen)
     EFFECT_SIZE_WEAK: float = 0.29  # r in [0.10, 0.29] = weak
