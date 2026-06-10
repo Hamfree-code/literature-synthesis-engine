@@ -94,3 +94,27 @@ def test_leave_one_out_flags_influential_study():
 def test_publication_bias_insufficient_data():
     out = assess_publication_bias([0.3, 0.4], [0.02, 0.03])
     assert out["publication_bias_risk"] == "insufficient_data"
+
+
+def test_pooling_skipped_below_threshold(monkeypatch):
+    from pipeline.phase5_analyze import meta_analyze_by_factor, settings
+
+    monkeypatch.setattr(settings, "MIN_STUDIES_POOLING", 3, raising=False)
+    rows = [
+        {"paper_id": "a", "factor": "x", "r": 0.3, "variance": 0.01, "n": 100},
+        {"paper_id": "b", "factor": "x", "r": 0.4, "variance": 0.01, "n": 100},
+    ]
+    out = meta_analyze_by_factor(rows)
+    assert out["x"]["pooled"] is None
+    assert out["x"]["pooled_skipped"] is True
+    assert out["x"]["n_studies"] == 2  # surfaced, not silently dropped
+
+
+def test_pooling_runs_at_threshold(monkeypatch):
+    from pipeline.phase5_analyze import meta_analyze_by_factor, settings
+
+    monkeypatch.setattr(settings, "MIN_STUDIES_POOLING", 3, raising=False)
+    rows = [{"paper_id": p, "factor": "x", "r": 0.3, "variance": 0.01, "n": 100} for p in ("a", "b", "c")]
+    out = meta_analyze_by_factor(rows)
+    assert out["x"]["pooled"] is not None
+    assert out["x"]["pooled"]["n_studies"] == 3

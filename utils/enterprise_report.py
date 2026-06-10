@@ -262,6 +262,12 @@ def appendix_markdown(qa: dict, prisma: dict, analysis: dict, manifest: dict, se
         "",
         rb.grade_sof_table(meta_by_factor, min_studies=settings.MIN_STUDIES_POOLING),
         "",
+        f"*Pooled estimates are reported only for factors with ≥ "
+        f"{settings.MIN_STUDIES_POOLING} studies. Effect sizes reported as OR/RR/HR "
+        "are converted to a Pearson r-equivalent for cross-metric comparison; the "
+        "pooled r is an approximation and should be read as a signal indicator, not "
+        "a substitute for a metric-native (e.g. log-OR) meta-analysis.*",
+        "",
         "## PRISMA 2020 Flow",
         "",
         f"Records identified: PMC = {prisma['identified_pmc']}, "
