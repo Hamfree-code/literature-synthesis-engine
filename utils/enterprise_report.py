@@ -87,13 +87,33 @@ def _cui_verified_pct(app_data) -> float:
     return round(100.0 * verified / total, 1) if total else 0.0
 
 
+def _retraction_status(app_data) -> dict:
+    path = app_data("data/filtered/retraction_status.json")
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
 def compute_qa(app_data, analysis: dict, manifest: dict, prisma: dict) -> dict:
     agg = analysis.get("aggregates") or {}
     yield_block = agg.get("deep_extraction_yield") or {}
     requested = yield_block.get("requested") or 0
     succeeded = yield_block.get("succeeded") or 0
     deep_rate = round(100.0 * succeeded / requested, 1) if requested else 0.0
+    rstatus = _retraction_status(app_data)
+    try:
+        from utils.resilience import degraded_services
+
+        degraded = degraded_services()
+    except Exception:
+        degraded = []
     return {
+        "retraction_screen_complete": rstatus.get("complete", None),
+        "retraction_checks_failed": rstatus.get("n_check_failed", 0),
+        "degraded_services": degraded,
         "run_id": manifest.get("run_id"),
         "engine_version": manifest.get("engine_version"),
         "deep_success_rate": deep_rate,

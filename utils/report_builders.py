@@ -145,14 +145,26 @@ def qa_sheet_markdown(qa: dict) -> str:
         row("Arbiter reconciliations triggered", qa.get("reconciliations", "n/a")),
         row("Kappa vs human (if any)", qa.get("kappa_summary", "not yet rated")),
         row("Retracted papers excluded", qa.get("n_retracted_excluded", 0)),
+        row("Retraction screen", _retraction_label(qa)),
         row("Full-text coverage", f"{qa.get('fulltext_coverage_pct', 'n/a')}%"),
         row("Sources breakdown", qa.get("sources_breakdown", "n/a")),
+        row("Degraded services", ", ".join(qa.get("degraded_services") or []) or "none"),
         row("API cost (measured)", f"${qa.get('api_cost_usd', 'n/a')}"),
         row("Runtime", f"{qa.get('runtime_seconds', 'n/a')} s"),
         "",
         f"_{HONEST_FRAMING}_",
     ]
     return "\n".join(lines)
+
+
+def _retraction_label(qa: dict) -> str:
+    complete = qa.get("retraction_screen_complete")
+    if complete is True:
+        return "complete (all DOIs checked)"
+    if complete is False:
+        n = qa.get("retraction_checks_failed", 0)
+        return f"⚠ INCOMPLETE — {n} DOI(s) could not be verified (treat as a gap)"
+    return "not run"
 
 
 def one_pager_markdown(topic_title: str, exec_data: dict, qa: dict, search_date: str) -> str:

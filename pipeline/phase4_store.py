@@ -154,28 +154,54 @@ def map_deep_to_schema(d: dict) -> dict:
 
 
 def screen_retractions(deep_ids: set[str], papers_by_id: dict[str, dict]) -> list[dict]:
-    """P2.2: cross-check each deep paper's DOI against Crossref. Writes
-    data/filtered/retracted.jsonl (consumed by Phase 5) and updates the papers
-    table. Bounded to the deep set so Crossref is never hit thousands of times.
-    Returns the list of retraction records."""
+    """P2.2 (hardened): cross-check each deep paper's DOI against Crossref with a
+    circuit breaker and a persistent cache. Distinguishes "checked clean" from
+    "could not check": a Crossref outage marks the screen INCOMPLETE rather than
+    silently reporting zero retractions. Writes data/filtered/retracted.jsonl and
+    data/filtered/retraction_status.json (consumed by Phase 5 / the QA sheet)."""
     import httpx
 
     from config.settings import settings
-    from utils.retraction import check_crossref_retraction
+    from utils.resilience import JsonFileCache, breaker
+    from utils.retraction import check_retraction_status
 
     if not settings.RETRACTION_CHECK_ENABLED:
         return []
 
+    cb = breaker("crossref", failure_threshold=5)
+    cache = JsonFileCache(app_data("data/raw/retraction_cache.json"))
     retracted: list[dict] = []
+    n_checked = n_clean = n_error = n_no_doi = 0
+
     ua = {"User-Agent": "LitSynthEngine/3.1 (mailto:research@example.com)"}
     with httpx.Client(headers=ua, timeout=15) as client:
         for pid in sorted(deep_ids):
             doi = (papers_by_id.get(pid) or {}).get("doi")
             if not doi:
+                n_no_doi += 1
                 continue
-            info = check_crossref_retraction(doi, client=client)
-            if info and info.get("is_retracted"):
-                retracted.append({"paper_id": pid, "doi": doi, **info})
+            cached = cache.get(doi)
+            if cached is not None:
+                status, info = cached["status"], cached.get("info")
+            elif not cb.allow():
+                status, info = "error", None  # breaker tripped: stop hammering
+            else:
+                status, info = check_retraction_status(doi, client=client)
+                if status == "error":
+                    cb.record_failure()
+                else:
+                    cb.record_success()
+                    cache.set(doi, {"status": status, "info": info})
+
+            if status == "retracted":
+                n_checked += 1
+                retracted.append({"paper_id": pid, "doi": doi, **(info or {})})
+            elif status == "clean":
+                n_checked += 1
+                n_clean += 1
+            else:
+                n_error += 1
+    cache.save()
 
     out = app_data("data/filtered/retracted.jsonl")
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -183,6 +209,26 @@ def screen_retractions(deep_ids: set[str], papers_by_id: dict[str, dict]) -> lis
         for rec in retracted:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
+    # Completeness contract: the screen is only "complete" if nothing errored
+    # and the breaker never tripped.
+    complete = n_error == 0 and not cb.tripped
+    status_doc = {
+        "complete": complete,
+        "n_retracted": len(retracted),
+        "n_clean": n_clean,
+        "n_check_failed": n_error,
+        "n_no_doi": n_no_doi,
+        "crossref": cb.status(),
+    }
+    app_data("data/filtered/retraction_status.json").write_text(
+        json.dumps(status_doc, indent=2), encoding="utf-8"
+    )
+
+    if not complete:
+        console.print(
+            f"[bold red]Retraction screen INCOMPLETE: {n_error} DOI(s) could not be "
+            f"checked (Crossref {cb.status()['state']}). Run reports this as a gap.[/]"
+        )
     if retracted:
         console.print(f"[red]Retraction screen: {len(retracted)} retracted paper(s) flagged[/]")
         try:
@@ -198,8 +244,8 @@ def screen_retractions(deep_ids: set[str], papers_by_id: dict[str, dict]) -> lis
                 ).eq("id", rec["paper_id"]).execute()
         except Exception as e:
             console.print(f"[yellow]Could not persist retraction flags: {e}[/]")
-    else:
-        console.print("[green]Retraction screen: no retractions found in deep set[/]")
+    elif complete:
+        console.print(f"[green]Retraction screen: {n_clean} checked clean, none retracted[/]")
     return retracted
 
 

@@ -9,8 +9,10 @@ Two layers, per the spec:
   - Layer B (no key): no-op — every entity keeps ``cui_verified = False`` and the
     LLM value. The key is never required.
 
-Verifications are memoised in-process and persisted to the ``umls_cache`` table
-because corpora repeat concepts heavily.
+Verifications are memoised in-process and (when ``verify_entities`` is given a
+``cache_path``) persisted to a JSON file so they survive across runs — corpora
+repeat concepts heavily. A circuit breaker stops hammering UMLS after repeated
+transport failures.
 """
 
 from __future__ import annotations
@@ -122,16 +124,37 @@ def verify_entity(client: httpx.Client, entity: dict) -> dict:
     return entity
 
 
-def verify_entities(entities: list[dict]) -> list[dict]:
-    """Verify a list of normalised entities. No-op (offline) when no key."""
+def verify_entities(entities: list[dict], cache_path=None) -> list[dict]:
+    """Verify a list of normalised entities. No-op (offline) when no key.
+
+    UPGRADE v3.1 (hardening): an optional ``cache_path`` backs the CUI lookups
+    with a persistent file cache so verifications survive across runs (corpora
+    repeat concepts heavily). A circuit breaker stops hammering UMLS after
+    repeated transport failures."""
     if not verification_available() or not entities:
         return entities
+
+    from utils.resilience import JsonFileCache, breaker
+
+    cb = breaker("umls", failure_threshold=8)
+    fcache = JsonFileCache(cache_path) if cache_path else None
+    if fcache:
+        for cui, val in (fcache.get("cui_lookups") or {}).items():
+            _CACHE.setdefault(cui, tuple(val))
+
     with httpx.Client(headers={"User-Agent": "LitSynthEngine/3.1"}) as client:
         for e in entities:
+            if not cb.allow():
+                break  # breaker tripped: remaining entities stay unverified
             try:
                 verify_entity(client, e)
+                cb.record_success()
             except Exception:
-                pass  # best-effort; keep the LLM value
+                cb.record_failure()  # best-effort; keep the LLM value
+
+    if fcache:
+        fcache.set("cui_lookups", {k: list(v) for k, v in _CACHE.items()})
+        fcache.save()
     return entities
 
 

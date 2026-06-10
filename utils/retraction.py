@@ -21,27 +21,43 @@ def _looks_retracted_title(title: str) -> bool:
     return t.startswith("retracted") or t.startswith("retraction") or "(retracted article)" in t
 
 
-def check_crossref_retraction(doi: str, client: httpx.Client | None = None) -> dict | None:
-    """Return retraction metadata for a DOI, or None if not retracted / unknown.
+def check_retraction_status(doi: str, client: httpx.Client | None = None) -> tuple[str, dict | None]:
+    """Three-state retraction check (the safety-critical distinction).
 
-    Output: {"is_retracted": True, "retraction_doi": str|None, "retraction_date": str|None}.
+    Returns one of:
+      ("retracted", info)  — confirmed retracted,
+      ("clean", None)      — checked and not retracted,
+      ("error", None)      — could NOT reach/parse Crossref (UNKNOWN, not clean).
+
+    A down Crossref must never masquerade as "clean": that is the difference
+    between "we verified this paper is fine" and "we couldn't verify it".
     """
     if not doi:
-        return None
+        return "clean", None
     owns_client = client is None
     client = client or httpx.Client(headers=_UA, timeout=15)
     try:
         r = client.get(f"{_CROSSREF}/{doi}")
+        if r.status_code == 404:
+            return "clean", None  # DOI unknown to Crossref → nothing to retract
         if r.status_code != 200:
-            return None
+            return "error", None
         msg = r.json().get("message") or {}
     except (httpx.HTTPError, ValueError):
-        return None
+        return "error", None
     finally:
         if owns_client:
             client.close()
 
-    return parse_crossref_message(msg)
+    info = parse_crossref_message(msg)
+    return ("retracted", info) if info else ("clean", None)
+
+
+def check_crossref_retraction(doi: str, client: httpx.Client | None = None) -> dict | None:
+    """Backward-compatible wrapper: retraction info dict, or None when clean /
+    unreachable. Prefer ``check_retraction_status`` to distinguish the two."""
+    status, info = check_retraction_status(doi, client)
+    return info if status == "retracted" else None
 
 
 def parse_crossref_message(msg: dict) -> dict | None:

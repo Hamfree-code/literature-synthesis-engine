@@ -93,6 +93,11 @@ def execute_industrial_pipeline(
         if bundled_credentials is not None:
             bundled_credentials.install()
 
+        # Fresh per-run circuit-breaker / service-health state.
+        from utils.resilience import reset_all
+
+        reset_all()
+
         # Topic-change guard: wipe stale state from a previous run if the
         # topic/mesh has changed.
         from utils.run_context import clear_stale_state_if_topic_changed

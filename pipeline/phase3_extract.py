@@ -513,7 +513,7 @@ def _run_umls_normalization() -> None:
             normalized = normalize_extraction(rec)
             if normalized:
                 if do_verify:
-                    normalized = verify_entities(normalized)
+                    normalized = verify_entities(normalized, cache_path=app_data("data/raw/umls_cache.json"))
                     verified += sum(1 for e in normalized if e.get("cui_verified"))
                 papers_with_entities += 1
                 total += len(normalized)
