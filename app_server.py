@@ -16,9 +16,13 @@ import multiprocessing
 
 multiprocessing.freeze_support()
 
-import bundled_credentials
+try:
+    import bundled_credentials
 
-bundled_credentials.install()
+    bundled_credentials.install()
+except ModuleNotFoundError:
+    # Dev mode: no baked-in credentials file → config.settings reads from .env.
+    pass
 
 import json
 import os

@@ -31,7 +31,10 @@ import multiprocessing
 import time
 from datetime import date
 
-import bundled_credentials
+try:
+    import bundled_credentials
+except ModuleNotFoundError:  # dev mode: credentials come from .env
+    bundled_credentials = None
 
 
 COST_PER_TRIAGE = 0.003
@@ -87,7 +90,8 @@ def execute_industrial_pipeline(
     """
     try:
         _t0 = time.time()
-        bundled_credentials.install()
+        if bundled_credentials is not None:
+            bundled_credentials.install()
 
         # Topic-change guard: wipe stale state from a previous run if the
         # topic/mesh has changed.
