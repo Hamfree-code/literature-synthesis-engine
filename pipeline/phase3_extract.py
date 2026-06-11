@@ -125,10 +125,26 @@ def build_deep_request(paper: dict) -> dict:
     return build_reviewer_request(paper, temperature=0.1, suffix="")
 
 
+# Opus 4.7/4.8 and Fable 5 reject temperature/top_p (HTTP 400). The arbiter
+# model is configurable (defaults to Opus), so gate the sampling param on the
+# model family instead of sending it unconditionally.
+_NO_SAMPLING_PARAMS = ("opus-4-7", "opus-4-8", "fable-5", "mythos-5")
+
+
+def _accepts_temperature(model: str) -> bool:
+    return not any(tag in model for tag in _NO_SAMPLING_PARAMS)
+
+
 def build_arbiter_request(paper: dict, reviewer_a: dict, reviewer_b: dict, *, compress: bool = False) -> dict:
     """Build a single arbiter request that reconciles two reviewer outputs.
     The reviewer JSONs are injected as inline text — placeholders must use
-    direct string replace (not str.format) because the JSON contains braces."""
+    direct string replace (not str.format) because the JSON contains braces.
+
+    The arbiter runs on ``ANTHROPIC_ARBITER_MODEL`` (Opus by default): the
+    strongest neutral adjudicator for reconciling the two Sonnet reviewers. We
+    only send ``temperature`` when the model accepts it — Opus 4.7/4.8 and Fable
+    reject sampling params, and the reconciliation is deterministic-by-prompt
+    regardless."""
     prompt = _topic_substitute(ARBITER_PROMPT)
     prompt = prompt.replace("{reviewer_a_json}", json.dumps(reviewer_a, ensure_ascii=False))
     prompt = prompt.replace("{reviewer_b_json}", json.dumps(reviewer_b, ensure_ascii=False))
@@ -137,11 +153,12 @@ def build_arbiter_request(paper: dict, reviewer_a: dict, reviewer_b: dict, *, co
     if compress:
         prompt = _COMPRESSION_PREAMBLE + prompt
     params: dict = {
-        "model": settings.ANTHROPIC_SONNET_MODEL,
+        "model": settings.ANTHROPIC_ARBITER_MODEL,
         "max_tokens": settings.DEEP_MAX_TOKENS,
-        "temperature": 0.0,
         "messages": [{"role": "user", "content": prompt}],
     }
+    if _accepts_temperature(settings.ANTHROPIC_ARBITER_MODEL):
+        params["temperature"] = 0.0
     if settings.EXTRACTION_TOOL_USE:
         params["tools"] = [ARBITER_TOOL]
         params["tool_choice"] = {"type": "tool", "name": ARBITER_TOOL["name"]}

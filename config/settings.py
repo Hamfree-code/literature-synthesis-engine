@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str
     ANTHROPIC_HAIKU_MODEL: str = "claude-haiku-4-5-20251001"
     ANTHROPIC_SONNET_MODEL: str = "claude-sonnet-4-6"
+    # Arbiter model: reconciles the two Sonnet reviewers. Opus is the strongest
+    # neutral adjudicator and stays inside the Anthropic Batch stack (no new
+    # provider integration). Reviewers stay on Sonnet so their temperature-based
+    # diversity (0.1/0.3) keeps working — Opus 4.7/4.8 reject sampling params.
+    ANTHROPIC_ARBITER_MODEL: str = "claude-opus-4-8"
 
     # NCBI / PubMed
     NCBI_API_KEY: str = ""

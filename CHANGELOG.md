@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **Opus arbiter:** the two-step deep extraction now reconciles its two Sonnet
+  reviewers with an **Opus** arbiter (`ANTHROPIC_ARBITER_MODEL`, default
+  `claude-opus-4-8`) instead of a third Sonnet pass — the strongest neutral
+  adjudicator, and it stays inside the Anthropic Batch stack (no new provider).
+  Reviewers remain on Sonnet at temperatures 0.1/0.3 so their diversity lever
+  keeps working. `temperature` is now only sent to the arbiter when the model
+  accepts it (Opus 4.7/4.8 and Fable reject sampling params with a 400). Set
+  `ANTHROPIC_ARBITER_MODEL=claude-sonnet-4-6` to restore the v3.1 behaviour.
+
 ### Added
 - **Unpaywall persistent cache:** DOI→OA-PDF-url lookups now persist across runs
   in `data/raw/unpaywall_cache.json` (`JsonFileCache`, same pattern as the

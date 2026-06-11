@@ -128,6 +128,33 @@ def test_arbiter_pass_reconciles_two_reviewers(tmp_data, monkeypatch, extraction
     assert results[0]["reviewer_b_raw"] is not None
 
 
+def test_arbiter_uses_configured_model_and_drops_temperature_for_opus(monkeypatch, extraction_valid):
+    """The arbiter runs on ANTHROPIC_ARBITER_MODEL (Opus by default) and must NOT
+    send `temperature` for Opus 4.7/4.8 — those models 400 on sampling params."""
+    monkeypatch.setattr(p3.settings, "ANTHROPIC_ARBITER_MODEL", "claude-opus-4-8", raising=False)
+    req = p3.build_arbiter_request({"id": "PMC1", "abstract": "x"}, extraction_valid, extraction_valid)
+    assert req["params"]["model"] == "claude-opus-4-8"
+    assert "temperature" not in req["params"]
+
+
+def test_arbiter_keeps_temperature_for_sonnet(monkeypatch, extraction_valid):
+    """A Sonnet arbiter still accepts temperature, so it is sent (back-compat)."""
+    monkeypatch.setattr(p3.settings, "ANTHROPIC_ARBITER_MODEL", "claude-sonnet-4-6", raising=False)
+    req = p3.build_arbiter_request({"id": "PMC1", "abstract": "x"}, extraction_valid, extraction_valid)
+    assert req["params"]["model"] == "claude-sonnet-4-6"
+    assert req["params"]["temperature"] == 0.0
+
+
+def test_reviewers_stay_on_sonnet_with_temperature_diversity(monkeypatch, extraction_valid):
+    """Reviewers are unchanged: Sonnet at distinct temperatures (the diversity
+    lever Opus can't provide since it rejects the temperature param)."""
+    paper = {"id": "PMC1", "abstract": "x"}
+    a = p3.build_reviewer_request(paper, temperature=0.1, suffix="a")
+    b = p3.build_reviewer_request(paper, temperature=0.3, suffix="b")
+    assert a["params"]["model"] == p3.settings.ANTHROPIC_SONNET_MODEL
+    assert (a["params"]["temperature"], b["params"]["temperature"]) == (0.1, 0.3)
+
+
 def test_extraction_schema_validates_fixture(extraction_valid):
     from config.extraction_schema import validate_extraction
 
