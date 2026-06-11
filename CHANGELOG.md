@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Cross-model Reviewer B (Gemini Flash):** the two-step deep extraction can run
+  Reviewer B on Gemini Flash via its Batch API (`REVIEWER_B_PROVIDER=gemini`,
+  `GEMINI_API_KEY`, `pip install -e .[gemini]`) while Reviewer A stays on Sonnet
+  and the Opus arbiter reconciles. A Sonnet reviewer and a Gemini reviewer fail
+  on different papers, so the arbiter gets decorrelated evidence instead of the
+  shared blind spots of two same-family reviewers. New `utils/gemini_client.py`
+  mirrors the submit/poll slice of the Anthropic batch client; Gemini output is
+  normalised through the existing Haiku repair pass so it's shaped identically
+  to a Sonnet extraction. Fail-secure: no key / missing SDK falls back to the
+  Anthropic reviewer; a degraded Gemini batch trips a circuit breaker and shows
+  up in `degraded_services`, and affected papers are recorded as failures, never
+  lost. `google.genai` is imported lazily so the engine runs unchanged with
+  Gemini off. Reconciled records carry `reviewer_b_provider` for traceability.
+
 ### Changed
 - **Opus arbiter:** the two-step deep extraction now reconciles its two Sonnet
   reviewers with an **Opus** arbiter (`ANTHROPIC_ARBITER_MODEL`, default

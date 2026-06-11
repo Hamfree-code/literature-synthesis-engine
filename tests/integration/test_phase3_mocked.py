@@ -155,6 +155,74 @@ def test_reviewers_stay_on_sonnet_with_temperature_diversity(monkeypatch, extrac
     assert (a["params"]["temperature"], b["params"]["temperature"]) == (0.1, 0.3)
 
 
+def test_arbiter_with_gemini_reviewer_b(tmp_data, monkeypatch, extraction_valid):
+    """Reviewer A = Sonnet (Anthropic fake batch), Reviewer B = Gemini (faked
+    batch), Arbiter = Anthropic. The reconciled record carries the Gemini output
+    as reviewer_b_raw and is tagged with the provider."""
+    monkeypatch.setattr(p3.settings, "ARBITER_ENABLED", True, raising=False)
+    monkeypatch.setattr(p3.settings, "REVIEWER_B_PROVIDER", "gemini", raising=False)
+
+    import utils.gemini_client as gc
+
+    monkeypatch.setattr(gc, "gemini_available", lambda: True)
+    monkeypatch.setattr(gc, "submit_gemini_batch", lambda reqs, *, model: "batches/x")
+    monkeypatch.setattr(
+        gc,
+        "poll_gemini_batch",
+        lambda name, **kw: [{"paper_id": "PMC5", "text": json.dumps(extraction_valid), "error": None}],
+    )
+
+    papers = [{"id": "PMC5", "abstract": "y"}]
+    arb_payload = dict(extraction_valid)
+    arb_payload["reconciliation_triggered"] = True
+
+    def script(cid, attempt):  # Anthropic path: Reviewer A + Arbiter only
+        if cid.endswith("__arb"):
+            return make_tool_result(cid, arb_payload, ARBITER_TOOL["name"])
+        return make_tool_result(cid, extraction_valid, EXTRACTION_TOOL["name"])
+
+    _install(monkeypatch, _FakeBatch(script))
+    p3._run_arbiter_pass(papers)
+
+    results = [json.loads(line) for line in (tmp_data / "data/filtered/deep_results.jsonl").open()]
+    assert results[0]["paper_id"] == "PMC5"
+    assert results[0]["reviewer_b_raw"] is not None
+    assert results[0]["reviewer_b_provider"] == "gemini"
+
+
+def test_gemini_batch_failure_is_recorded_not_lost(tmp_data, monkeypatch, extraction_valid):
+    """If the Gemini batch errors, Reviewer B fails for every paper but the
+    breaker trips (degraded_services) and the paper survives on Reviewer A."""
+    monkeypatch.setattr(p3.settings, "ARBITER_ENABLED", True, raising=False)
+    monkeypatch.setattr(p3.settings, "REVIEWER_B_PROVIDER", "gemini", raising=False)
+
+    import utils.gemini_client as gc
+    from utils import resilience
+
+    resilience.reset_all()
+    monkeypatch.setattr(gc, "gemini_available", lambda: True)
+
+    def _boom(*a, **k):
+        raise gc.GeminiBatchError("JOB_STATE_FAILED")
+
+    monkeypatch.setattr(gc, "submit_gemini_batch", _boom)
+
+    papers = [{"id": "PMC7", "abstract": "z"}]
+
+    def script(cid, attempt):  # Reviewer A succeeds; no arbiter (B failed)
+        return make_tool_result(cid, extraction_valid, EXTRACTION_TOOL["name"])
+
+    _install(monkeypatch, _FakeBatch(script))
+    p3._run_arbiter_pass(papers)
+
+    # Paper is not lost: Reviewer A carries it through unilaterally.
+    results = [json.loads(line) for line in (tmp_data / "data/filtered/deep_results.jsonl").open()]
+    assert results[0]["paper_id"] == "PMC7"
+    # Gemini degradation is surfaced, not hidden.
+    assert "gemini" in resilience.degraded_services()
+    resilience.reset_all()
+
+
 def test_extraction_schema_validates_fixture(extraction_valid):
     from config.extraction_schema import validate_extraction
 

@@ -125,6 +125,112 @@ def build_deep_request(paper: dict) -> dict:
     return build_reviewer_request(paper, temperature=0.1, suffix="")
 
 
+def _gemini_reviewer_system_instruction() -> str:
+    """Reviewer B (Gemini) system instruction: the same schema/instructions the
+    Anthropic reviewers receive (the prompt prefix before the full-text body),
+    plus an explicit JSON-only directive since Gemini has no forced tool_use."""
+    prompt = _topic_substitute(EXTRACT_PROMPT)
+    schema_part = prompt.split(_FULLTEXT_SENTINEL)[0]
+    return (
+        schema_part + "\n\nReturn ONLY a single valid JSON object matching the schema above. "
+        "No markdown fences, no commentary."
+    )
+
+
+def _extract_b_via_gemini(
+    papers: list[dict], *, temperature: float
+) -> tuple[dict[str, dict], list[dict], list[dict]]:
+    """Reviewer B on Gemini Flash via its Batch API. Returns the same
+    ``(parsed_by_pid, attempts, failures)`` triple as ``_extract_with_retries``
+    so ``_run_arbiter_pass`` is agnostic to the provider.
+
+    Gemini's batch handles its own server-side retries, so there is no
+    max_tokens compression loop here. Malformed JSON is salvaged with the same
+    Haiku repair pass the Anthropic path uses, so a Gemini extraction is shaped
+    identically to a Sonnet one. Any batch-level failure trips the ``gemini``
+    breaker (surfaced in ``degraded_services``) and records the affected papers
+    as failures — never lost."""
+    from utils import gemini_client
+    from utils.resilience import breaker
+
+    parsed_by_pid: dict[str, dict] = {}
+    attempts: list[dict] = []
+    failures: list[dict] = []
+
+    # One batch covers all papers, so a single failure means Reviewer B is
+    # degraded for the whole run — threshold 1.
+    cb = breaker("gemini", failure_threshold=1)
+
+    def _attempt_record(pid: str, ok: bool, detail: str) -> dict:
+        return {
+            "paper_id": pid,
+            "reviewer": "b",
+            "attempt": 1,
+            "stop_reason": None,
+            "tokens_out": None,
+            "parse_ok": ok,
+            "detail": detail,
+        }
+
+    if not cb.allow():
+        for p in papers:
+            failures.append({"paper_id": p["id"], "reason": "gemini_circuit_open", "detail": ""})
+        return parsed_by_pid, attempts, failures
+
+    system_instruction = _gemini_reviewer_system_instruction()
+    requests = [
+        gemini_client.build_inlined_request(
+            paper_id=p["id"],
+            system_instruction=system_instruction,
+            content=(p.get("full_text") or p.get("abstract") or ""),
+            max_output_tokens=settings.DEEP_MAX_TOKENS,
+            temperature=temperature,
+        )
+        for p in papers
+    ]
+    ordered_pids = [p["id"] for p in papers]
+
+    try:
+        console.print(
+            f"  Reviewer B (Gemini {settings.GEMINI_FLASH_MODEL}): submitting {len(requests)} papers..."
+        )
+        job_name = gemini_client.submit_gemini_batch(requests, model=settings.GEMINI_FLASH_MODEL)
+        results = gemini_client.poll_gemini_batch(job_name)
+        cb.record_success()
+    except Exception as e:  # GeminiBatchError or any transport/SDK error
+        cb.record_failure()
+        console.print(f"[yellow]Reviewer B (Gemini) degraded: {str(e)[:200]}[/]")
+        for p in papers:
+            failures.append({"paper_id": p["id"], "reason": "gemini_batch_error", "detail": str(e)[:300]})
+        return parsed_by_pid, attempts, failures
+
+    by_pid: dict[str | None, dict] = {}
+    for i, res in enumerate(results):
+        pid = res.get("paper_id") or (ordered_pids[i] if i < len(ordered_pids) else None)
+        by_pid[pid] = res
+
+    for pid in ordered_pids:
+        res = by_pid.get(pid)
+        if not res or res.get("error") or not res.get("text"):
+            detail = (res or {}).get("error") or "no response"
+            attempts.append(_attempt_record(pid, False, f"gemini: {detail}"))
+            failures.append({"paper_id": pid, "reason": "gemini_no_response", "detail": str(detail)[:300]})
+            continue
+        parsed = parse_json_response(res["text"])
+        detail = "gemini"
+        if parsed is None and settings.REPAIR_PASS_ENABLED:
+            parsed = repair_json_to_schema(res["text"], settings.ANTHROPIC_HAIKU_MODEL)
+            detail = "gemini+repair"
+        if parsed is None:
+            attempts.append(_attempt_record(pid, False, "gemini: unparseable"))
+            failures.append({"paper_id": pid, "reason": "gemini_parse_failed", "detail": "unparseable JSON"})
+            continue
+        attempts.append(_attempt_record(pid, True, detail))
+        parsed_by_pid[pid] = parsed
+
+    return parsed_by_pid, attempts, failures
+
+
 # Opus 4.7/4.8 and Fable 5 reject temperature/top_p (HTTP 400). The arbiter
 # model is configurable (defaults to Opus), so gate the sampling param on the
 # model family instead of sending it unconditionally.
@@ -403,16 +509,27 @@ def _run_arbiter_pass(deep_papers: list[dict]) -> None:
     attempts: list[dict] = []
 
     # ---- Step 1: Reviewers A and B (each retry-aware) ---------------------
+    # Reviewer A is always Sonnet (temperature 0.1). Reviewer B is Sonnet
+    # (temperature 0.3) by default, or Gemini Flash when REVIEWER_B_PROVIDER is
+    # "gemini" and a key is configured — cross-model diversity decorrelates the
+    # extraction errors a same-family pair would share.
+    from utils.gemini_client import gemini_available
+
     parsed_a, att_a, fail_a = _extract_with_retries(deep_papers, suffix="a", temperature=0.1)
-    parsed_b, att_b, fail_b = _extract_with_retries(deep_papers, suffix="b", temperature=0.3)
+    if settings.REVIEWER_B_PROVIDER == "gemini" and gemini_available():
+        b_provider = "gemini"
+        parsed_b, att_b, fail_b = _extract_b_via_gemini(deep_papers, temperature=0.3)
+    else:
+        b_provider = "anthropic"
+        parsed_b, att_b, fail_b = _extract_with_retries(deep_papers, suffix="b", temperature=0.3)
     attempts.extend(att_a)
     attempts.extend(att_b)
     fail_a_by_pid = {f["paper_id"]: f for f in fail_a}
     fail_b_by_pid = {f["paper_id"]: f for f in fail_b}
 
     console.print(
-        f"  Reviewer pass complete: A={len(parsed_a)}/{len(deep_papers)}, "
-        f"B={len(parsed_b)}/{len(deep_papers)}"
+        f"  Reviewer pass complete: A=Sonnet {len(parsed_a)}/{len(deep_papers)}, "
+        f"B={b_provider} {len(parsed_b)}/{len(deep_papers)}"
     )
 
     # ---- Step 2: Arbiter for papers where BOTH reviewers succeeded --------
@@ -471,8 +588,10 @@ def _run_arbiter_pass(deep_papers: list[dict]) -> None:
     for pid, arb in parsed_arb.items():
         arb["reviewer_a_raw"] = parsed_a.get(pid)
         arb["reviewer_b_raw"] = parsed_b.get(pid)
+        arb["reviewer_b_provider"] = b_provider
         final_extractions[pid] = arb
     for pid, single in arbiter_skipped.items():
+        single.setdefault("reviewer_b_provider", b_provider)
         final_extractions.setdefault(pid, single)
 
     # A paper is a true failure only if it ended up in NO final extraction.

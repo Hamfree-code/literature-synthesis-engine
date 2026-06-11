@@ -16,11 +16,23 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str
     ANTHROPIC_HAIKU_MODEL: str = "claude-haiku-4-5-20251001"
     ANTHROPIC_SONNET_MODEL: str = "claude-sonnet-4-6"
-    # Arbiter model: reconciles the two Sonnet reviewers. Opus is the strongest
-    # neutral adjudicator and stays inside the Anthropic Batch stack (no new
-    # provider integration). Reviewers stay on Sonnet so their temperature-based
-    # diversity (0.1/0.3) keeps working — Opus 4.7/4.8 reject sampling params.
+    # Arbiter model: reconciles the two reviewers. Opus is the strongest neutral
+    # adjudicator and stays inside the Anthropic Batch stack (no new provider
+    # integration). Reviewer A stays on Sonnet so its temperature lever keeps
+    # working — Opus 4.7/4.8 reject sampling params.
     ANTHROPIC_ARBITER_MODEL: str = "claude-opus-4-8"
+
+    # Reviewer B provider — "anthropic" (Sonnet, same as v3.1) or "gemini"
+    # (Gemini Flash via its Batch API). Cross-model diversity at the reviewer
+    # layer decorrelates extraction errors that two same-family reviewers share.
+    # Fail-secure: "gemini" with no GEMINI_API_KEY (or the SDK absent) silently
+    # falls back to the Anthropic reviewer; a degraded Gemini batch trips a
+    # circuit breaker and surfaces in degraded_services.
+    REVIEWER_B_PROVIDER: str = "anthropic"
+
+    # Google Gemini (Reviewer B). Free key at https://aistudio.google.com/apikey
+    GEMINI_API_KEY: str = ""
+    GEMINI_FLASH_MODEL: str = "gemini-2.5-flash"  # gemini-2.5-flash-lite is cheaper
 
     # NCBI / PubMed
     NCBI_API_KEY: str = ""
