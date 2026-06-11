@@ -21,10 +21,13 @@ For a medical condition (any term queryable in PubMed/PMC), one run emits:
 1. **Literal-quote provenance**: every deep-extraction claim is bound to a
    verbatim quote stored per-paper. Verifying any claim takes < 1 min without DB
    access (anchor links in HTML / page links in PDF).
-2. **Dual-reviewer + arbiter extraction**: each paper is extracted twice
-   (Sonnet @ temp 0.1 and 0.3) and reconciled by a third pass (temp 0.0),
-   mirroring dual-reviewer SR with adjudication. Disagreements are surfaced
-   (`reconciliation_triggered`).
+2. **Dual-reviewer + arbiter extraction**: each paper is extracted twice and
+   reconciled by an independent arbiter, mirroring dual-reviewer SR with
+   adjudication. Reviewer A is Sonnet (temp 0.1); Reviewer B is Sonnet (temp 0.3)
+   or — for genuine cross-model diversity that decorrelates shared blind spots —
+   **Gemini Flash**. The arbiter is **Opus** (the strongest neutral adjudicator).
+   Disagreements are surfaced (`reconciliation_triggered`); the reviewer-B
+   provider is recorded (`reviewer_b_provider`). See `07` for the rationale.
 3. **Reference statistics**: PyMARE DerSimonian–Laird pooling + statsmodels
    Egger, not hand-rolled numpy (legacy kept as a checked fallback).
 4. **Fail-secure provenance of evidence**: retracted papers excluded; if the
@@ -45,6 +48,9 @@ screening)." The system formats to the standard without pretending to be the
 human process.
 
 ## Status (2026-06)
-v3.1 implemented (P0–P7 + resilience hardening). 103 non-live tests green, CI
-configured. **No live end-to-end run executed yet** in this environment (network
-allowlist + budget) — see `05` and `06`.
+v3.1 implemented (P0–P7 + resilience hardening) plus three post-v3.1 deltas
+(Unpaywall fail-secure + cache, Opus arbiter, cross-model Gemini reviewer — see
+`07`). **117 non-live tests green**, CI configured. **No live end-to-end run
+executed yet** in this environment (network allowlist + budget); the Gemini
+reviewer path is unit-tested with fakes but not yet exercised against the real
+Gemini Batch API — see `05` and `07`.

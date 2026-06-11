@@ -6,9 +6,9 @@
 
 ## What this is (one sentence)
 A disease-agnostic pipeline that ingests open-access biomedical literature,
-performs dual-reviewer + arbiter LLM extraction with literal-quote provenance,
-runs reference meta-analysis, and emits auditable, PRISMA/GRADE-formatted
-consulting deliverables.
+performs dual-reviewer (optionally cross-model) + Opus-arbiter LLM extraction
+with literal-quote provenance, runs reference meta-analysis, and emits auditable,
+PRISMA/GRADE-formatted consulting deliverables.
 
 ## Reading order (token budget ~ in parens)
 1. `01_OVERVIEW.md` — problem, value, users, status (~900t)
@@ -17,14 +17,22 @@ consulting deliverables.
 4. `04_V31_CHANGES.md` — what v3.1 added (P0–P7 + hardening), grounded (~1500t)
 5. `05_LIMITATIONS_RISKS.md` — honest gaps, failure modes, what is NOT done (~1200t)
 6. `06_EVAL_RUBRIC.md` — questions to score + where to verify each claim (~1200t)
+7. `07_RECENT_CHANGES.md` — post-v3.1 deltas (Unpaywall fail-secure, Opus arbiter,
+   cross-model Gemini reviewer), grounded at `file:symbol` (~1500t)
+8. `08_VERIFICATION_LOG.md` — reproducible green-state report: exact commands +
+   observed outputs (tests, coverage, ruff, lazy-import safety) (~700t)
 
 ## Hard facts (verifiable)
-- Language: Python 3.12 (pinned). Core LOC ≈ 6,900 across `pipeline/`, `utils/`, `config/`.
-- Tests: **99 non-live + 1 live** (`pytest -m "not live"`), run < 25s, mocked APIs (respx).
-  Coverage on `utils/` + `pipeline/phase5_analyze.py` ≈ 72%.
+- Language: Python 3.12 (pinned). Core LOC ≈ 6,584 across `pipeline/`, `utils/`, `config/`.
+- Tests: **117 non-live + 1 live** (`pytest -m "not live"`), run < 15s, mocked APIs
+  (respx + fakes). Coverage on `utils/` + `pipeline/phase5_analyze.py` = **73%**
+  (measured this iteration — see `08`).
 - CI: GitHub Actions — ruff lint + format + pytest + coverage (`.github/workflows/ci.yml`).
-- Models: Claude Haiku (triage), Claude Sonnet (extraction/arbiter/synthesis). Anthropic Batch API.
-- External services: PubMed/PMC (NCBI), OpenAlex, Unpaywall, Crossref, UMLS REST, Supabase (pgvector).
+- Models: Claude Haiku (triage), Claude Sonnet (Reviewer A + synthesis), **Claude Opus
+  (arbiter, default `claude-opus-4-8`)**, **Gemini Flash (optional Reviewer B,
+  cross-model)**. Anthropic + Gemini Batch APIs.
+- External services: PubMed/PMC (NCBI), OpenAlex, Unpaywall, Crossref, UMLS REST,
+  Google Gemini (optional), Supabase (pgvector).
 - License: MIT. Brand: "Hams & Co. Research Division".
 
 ## How to evaluate fairly (important caveats)

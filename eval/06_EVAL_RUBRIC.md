@@ -43,14 +43,29 @@ to check each in the repo. Score 1–5 per dimension; cite file:symbol as eviden
    `test_phase5_pure.py::test_propagate_uncertainty_topic_neutral`.
 10. "Provenance verifiable without DB" → `phase6_report.py` anchor/link wiring;
     `utils/enterprise_report.py` supplement (`provenance.csv`).
+11. "Unpaywall outage ≠ no-OA (fail-secure) + cached" →
+    `pipeline/sources/unpaywall.py::{_lookup_oa_pdf_url,fetch_fulltext_via_unpaywall}`
+    (the `definitive` flag) + `tests/unit/test_sources.py::
+    test_unpaywall_api_outage_feeds_breaker_and_is_not_cached`.
+12. "Opus arbiter, temperature gated by model family" →
+    `phase3_extract.py::{build_arbiter_request,_accepts_temperature}` +
+    `tests/integration/test_phase3_mocked.py::
+    test_arbiter_uses_configured_model_and_drops_temperature_for_opus`.
+13. "Cross-model Reviewer B is fail-secure and never loses a paper" →
+    `phase3_extract.py::_extract_b_via_gemini` + `utils/gemini_client.py` +
+    `tests/integration/test_phase3_mocked.py::
+    test_gemini_batch_failure_is_recorded_not_lost` + `tests/unit/test_gemini_client.py`.
 
 ## How to run the evidence yourself
 ```
 uv venv && uv pip install -e ".[dev]"
-uv run pytest -m "not live"          # 103 tests, < 25s
+uv run pytest -m "not live"          # 117 tests, < 15s
 uv run ruff check . && uv run ruff format --check .
 ```
 Live e2e (needs real keys + open network): `uv run pytest -m live`.
+Gemini Reviewer B (optional): `uv pip install -e ".[gemini]"`, set
+`GEMINI_API_KEY` + `REVIEWER_B_PROVIDER=gemini`. The exact green-state evidence
+captured this iteration is in `08_VERIFICATION_LOG.md`.
 
 ## Suggested probing questions for the model under evaluation
 - Where could the pipeline still fake confidence it doesn't have? (look for

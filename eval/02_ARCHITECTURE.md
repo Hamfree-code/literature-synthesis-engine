@@ -17,7 +17,7 @@ Files are JSONL/JSON under an app-data dir; each phase reads the previous one's.
 | 1 Ingest | `phase1_ingest.py` | query → `papers.jsonl` | NCBI/PMC, OpenAlex, (Unpaywall on enrich) |
 | 3a Triage | `phase3_extract.py::run_triage` | abstracts → `triage_results.jsonl` | Anthropic Haiku (Batch) |
 | 3c Enrich | `phase1_ingest.py::enrich_with_fulltext` | selected ids → `fulltext_cache.jsonl` | PMC OA, Unpaywall fallback |
-| 3d Deep | `phase3_extract.py::run_deep` | full text → `deep_results.jsonl` | Anthropic Sonnet ×3 (A/B/arbiter) |
+| 3d Deep | `phase3_extract.py::run_deep` | full text → `deep_results.jsonl` | Reviewer A=Sonnet, B=Sonnet **or Gemini Flash**, arbiter=**Opus** |
 | 3d-bis Norm | `umls_normalizer.py` + `umls_client.py` | entities → `normalized_entities.jsonl` | Anthropic Haiku tool-call, UMLS REST |
 | 4 Persist | `phase4_store.py` | → Supabase + `retracted.jsonl` | Supabase, Crossref |
 | 5 Analyze | `phase5_analyze.py` | → `analysis.json` | Anthropic Sonnet ×3 synthesis |
@@ -38,11 +38,22 @@ triggers a compression-retry, then a Haiku repair pass, then a persisted
 `extraction_failed` (never silent loss). Per-attempt log →
 `extraction_attempts`.
 
+Reviewer B may run on Gemini Flash (`REVIEWER_B_PROVIDER=gemini`,
+`_extract_b_via_gemini`). Gemini has no forced-tool guarantee, so its JSON goes
+through the **same Haiku repair pass** before reconciliation — Reviewer B's
+output is therefore shaped identically to a Sonnet extraction with no schema
+translation. The arbiter model is configurable (`ANTHROPIC_ARBITER_MODEL`,
+default Opus); `temperature` is only sent to models that accept it (Opus
+4.7/4.8 and Fable reject sampling params). See `07`.
+
 ## Key modules (by responsibility)
 - Stats: `phase5_analyze.py` (orchestration) + `utils/meta_stats.py` (PyMARE/statsmodels).
 - Credibility: `utils/umls_client.py` (CUI verify), `utils/retraction.py` (Crossref).
 - Sources: `pipeline/sources/{openalex,unpaywall}.py`.
-- Resilience: `utils/resilience.py` (CircuitBreaker, JsonFileCache, health registry).
+- Cross-model reviewer: `utils/gemini_client.py` (Gemini Batch API wrapper; lazy
+  SDK import so the engine runs unchanged with Gemini off).
+- Resilience: `utils/resilience.py` (CircuitBreaker, JsonFileCache, health
+  registry). Breakers wired on Crossref, UMLS, OpenAlex, Unpaywall, **Gemini**.
 - Reporting: `utils/{run_manifest,report_builders,enterprise_report,export_docx,export_citations}.py`.
 - Validation: `utils/validation_engine.py` (Cohen's Kappa / RMSE / Pearson panel).
 

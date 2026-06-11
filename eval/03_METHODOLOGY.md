@@ -5,7 +5,7 @@
 |---|---|---|
 | Search strategy | PRISMA-S | Multi-source query frozen in manifest; retraction exclusion |
 | Screening | PRISMA screening box | Haiku triage (structured, tool-use) |
-| Dual extraction + adjudication | Dual-reviewer SR w/ arbitration | Sonnet A(0.1)+B(0.3) → arbiter(0.0) |
+| Dual extraction + adjudication | Dual-reviewer SR w/ arbitration | A=Sonnet(0.1) + B=Sonnet(0.3) **or Gemini Flash** → **Opus** arbiter |
 | Quality appraisal | NOS, GRADE, QUADAS-2 | Per-paper in deep extraction schema |
 | Effect sizes | Cohen's r classification | OR/RR/HR → r-equivalent + magnitude |
 | Pooling | DerSimonian–Laird RE | PyMARE; legacy numpy fallback (diff < 1%) |

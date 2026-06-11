@@ -10,6 +10,13 @@ project's ethos is to declare these, not hide them.
 - Therefore headline numbers in v3.0 docs (e.g. "~94% deep success",
   "% CUIs verified") are **targets/historical, not re-measured under v3.1**.
   Judge engineering + methodology; treat yield/coverage as to-be-confirmed.
+- **Gemini Reviewer B is unit-tested with fakes, not yet run live.** The Gemini
+  Batch API surface was verified by introspecting the installed `google-genai`
+  SDK (signatures, `JobState` enum, result paths), not by submitting a real job
+  (needs `GEMINI_API_KEY` + cost). One open detail for the first live run: whether
+  `batches.create(model=...)` wants `gemini-2.5-flash` or `models/gemini-2.5-flash`.
+  Until run live, the cross-model **quality** benefit is a design hypothesis to be
+  measured (the `reviewer_*_raw` fields make an A/B straightforward — see `07`).
 
 ## Methodological limits (declared in-report)
 - **Not a registered systematic review** — no protocol pre-registration, no
@@ -49,7 +56,10 @@ project's ethos is to declare these, not hide them.
 | Crossref (retraction) | 3-state; run marked INCOMPLETE | yes (fail-secure) |
 | UMLS | breaker + cache; `cui_verified=false` | yes (degrade) |
 | OpenAlex | breaker; fewer sources; surfaced | yes (degrade) |
-| Unpaywall | breaker; abstract fallback; surfaced | yes (degrade) |
+| Unpaywall | breaker; **outage ≠ "no OA"**; cached; surfaced | yes (fail-secure) |
+| Gemini (Reviewer B) | breaker; papers carried by Reviewer A + Opus; surfaced | yes (degrade) |
 | Supabase | Phase 4 errors (hard dep) | **NO — run fails** |
 
 The one non-graceful dependency is Supabase. Everything else degrades loudly.
+A Gemini outage never blocks a run: those papers proceed on Reviewer A alone
+(`arbiter_notes` records the unilateral use) and `degraded_services` flags it.
