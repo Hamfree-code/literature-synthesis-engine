@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Unpaywall persistent cache:** DOI→OA-PDF-url lookups now persist across runs
+  in `data/raw/unpaywall_cache.json` (`JsonFileCache`, same pattern as the
+  retraction and UMLS caches). Only definitive answers (an OA url, a confirmed
+  "no OA", or an unknown-DOI 404) are cached.
+
+### Fixed
+- **Fail-secure Unpaywall lookups:** an Unpaywall API outage (5xx/transport
+  error) during the DOI lookup is no longer indistinguishable from a legitimate
+  "no OA available" — it now feeds the circuit breaker and surfaces in the QA
+  sheet via `degraded_services` instead of silently degrading coverage.
+
+### Notes
+- OpenAlex discovery results are deliberately **not** cached persistently:
+  search freshness is part of the evidence contract (new literature must be
+  able to appear between runs), and the ingested corpus is already persisted
+  in `data/raw/papers.jsonl`. The OpenAlex circuit breaker + `degraded_services`
+  reporting remain in place.
+
 ## [3.1.0] — 2026-06-10
 
 Implements the UPGRADE v3.1 contract (`docs/V31_MASTER_PLAN.md`). Plan,

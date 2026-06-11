@@ -99,6 +99,15 @@ def _reset_breakers():
     resilience.reset_all()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_unpaywall_cache(tmp_path):
+    """Point the persistent DOI→url cache at a tmp file so tests never touch
+    (or get polluted by) the real app-data cache."""
+    up._url_cache = resilience.JsonFileCache(tmp_path / "unpaywall_cache.json")
+    yield
+    up._url_cache = None
+
+
 @respx.mock
 def test_openalex_breaker_trips_on_repeated_5xx(monkeypatch):
     monkeypatch.setattr(oa.settings, "OPENALEX_MAILTO", "x@y.z", raising=False)
@@ -132,3 +141,59 @@ def test_unpaywall_breaker_short_circuits_when_tripped(monkeypatch):
 
 def test_extract_pdf_text_handles_garbage():
     assert up.extract_pdf_text(b"not a pdf") is None
+
+
+# ── P2 Gemini sprint (cont.): fail-secure lookups + persistent DOI cache ────
+
+
+@respx.mock
+def test_unpaywall_api_outage_feeds_breaker_and_is_not_cached(monkeypatch):
+    """A 5xx from the Unpaywall API is a degradation, not a 'no OA': it must
+    count as a breaker failure and must never be cached as a definitive miss."""
+    monkeypatch.setattr(up.settings, "UNPAYWALL_ENABLED", True, raising=False)
+    monkeypatch.setattr(up.settings, "UNPAYWALL_EMAIL", "x@y.z", raising=False)
+    respx.get(url__regex=r".*api\.unpaywall\.org.*").mock(return_value=httpx.Response(503))
+    assert up.fetch_fulltext_via_unpaywall("10.1/down") is None
+    assert resilience.breaker("unpaywall").total_failures >= 1
+    assert "10.1/down" not in (up._cache().get(up._CACHE_KEY) or {})
+
+
+@respx.mock
+def test_unpaywall_definitive_no_oa_is_cached_and_skips_network(monkeypatch):
+    monkeypatch.setattr(up.settings, "UNPAYWALL_ENABLED", True, raising=False)
+    monkeypatch.setattr(up.settings, "UNPAYWALL_EMAIL", "x@y.z", raising=False)
+    route = respx.get(url__regex=r".*api\.unpaywall\.org.*").mock(
+        return_value=httpx.Response(200, json={"best_oa_location": None})
+    )
+    assert up.fetch_fulltext_via_unpaywall("10.1/nooa") is None
+    assert up.fetch_fulltext_via_unpaywall("10.1/nooa") is None  # served from cache
+    assert route.call_count == 1
+    assert (up._cache().get(up._CACHE_KEY) or {}).get("10.1/nooa") is None
+    assert "10.1/nooa" in (up._cache().get(up._CACHE_KEY) or {})
+    # A definitive answer is a healthy API: no breaker failures.
+    assert resilience.breaker("unpaywall").total_failures == 0
+
+
+@respx.mock
+def test_unpaywall_unknown_doi_404_is_definitive_miss(monkeypatch):
+    monkeypatch.setattr(up.settings, "UNPAYWALL_ENABLED", True, raising=False)
+    monkeypatch.setattr(up.settings, "UNPAYWALL_EMAIL", "x@y.z", raising=False)
+    respx.get(url__regex=r".*api\.unpaywall\.org.*").mock(return_value=httpx.Response(404))
+    assert up.fetch_fulltext_via_unpaywall("10.1/unknown") is None
+    assert "10.1/unknown" in (up._cache().get(up._CACHE_KEY) or {})
+    assert resilience.breaker("unpaywall").total_failures == 0
+
+
+@respx.mock
+def test_unpaywall_url_cache_persists_to_disk(monkeypatch, tmp_path):
+    monkeypatch.setattr(up.settings, "UNPAYWALL_ENABLED", True, raising=False)
+    monkeypatch.setattr(up.settings, "UNPAYWALL_EMAIL", "x@y.z", raising=False)
+    up._url_cache = resilience.JsonFileCache(tmp_path / "u.json")
+    respx.get(url__regex=r".*api\.unpaywall\.org.*").mock(
+        return_value=httpx.Response(200, json={"best_oa_location": {"url_for_pdf": "http://pdf/a.pdf"}})
+    )
+    respx.get("http://pdf/a.pdf").mock(return_value=httpx.Response(200, content=b"%PDF-fake"))
+    up.fetch_fulltext_via_unpaywall("10.1/a")
+    # Reload from disk: the resolved url survives across runs.
+    reloaded = resilience.JsonFileCache(tmp_path / "u.json")
+    assert (reloaded.get(up._CACHE_KEY) or {}).get("10.1/a") == "http://pdf/a.pdf"

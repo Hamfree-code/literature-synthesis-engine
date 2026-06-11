@@ -21,27 +21,59 @@ _UNPAYWALL = "https://api.unpaywall.org/v2"
 _MAX_PDF_CHARS = 120_000  # parity with the legacy flat cap
 
 
-def best_oa_pdf_url(doi: str, *, email: str = "", client: httpx.Client | None = None) -> str | None:
-    """Return the best OA PDF url Unpaywall declares for a DOI, or None."""
+def _lookup_oa_pdf_url(
+    doi: str, *, email: str = "", client: httpx.Client | None = None
+) -> tuple[str | None, bool]:
+    """Resolve the best OA PDF url for a DOI against the Unpaywall API.
+
+    Returns ``(url, definitive)``. ``definitive=True`` means Unpaywall answered
+    authoritatively (an OA url, or a confirmed "no OA" / unknown-DOI 404) and the
+    result is safe to cache. ``definitive=False`` means a transport or server
+    error — indistinguishable outcomes must not be conflated with "no OA"
+    (fail-secure: an API outage is a degradation, not an absence of evidence)."""
     if not doi:
-        return None
+        return None, True
     email = email or settings.UNPAYWALL_EMAIL or settings.NCBI_EMAIL
     if not email:
-        return None
+        return None, True
     owns = client is None
     client = client or httpx.Client(timeout=20)
     try:
         r = client.get(f"{_UNPAYWALL}/{doi}", params={"email": email})
+        if r.status_code == 404:  # DOI unknown to Unpaywall — definitive miss
+            return None, True
         if r.status_code != 200:
-            return None
+            return None, False
         data = r.json()
     except (httpx.HTTPError, ValueError):
-        return None
+        return None, False
     finally:
         if owns:
             client.close()
     loc = data.get("best_oa_location") or {}
-    return loc.get("url_for_pdf") or None
+    return loc.get("url_for_pdf") or None, True
+
+
+def best_oa_pdf_url(doi: str, *, email: str = "", client: httpx.Client | None = None) -> str | None:
+    """Return the best OA PDF url Unpaywall declares for a DOI, or None."""
+    return _lookup_oa_pdf_url(doi, email=email, client=client)[0]
+
+
+_CACHE_KEY = "oa_pdf_urls"
+_url_cache = None
+
+
+def _cache():
+    """Lazy JsonFileCache (Gemini sprint P2): DOI→url lookups survive across
+    runs, like the retraction and UMLS caches. Only definitive answers land
+    here; errors are never cached."""
+    global _url_cache
+    if _url_cache is None:
+        from app_paths import app_data
+        from utils.resilience import JsonFileCache
+
+        _url_cache = JsonFileCache(app_data("data/raw/unpaywall_cache.json"))
+    return _url_cache
 
 
 def extract_pdf_text(pdf_bytes: bytes) -> str | None:
@@ -90,7 +122,22 @@ def fetch_fulltext_via_unpaywall(
     cb = breaker("unpaywall", failure_threshold=5)
     if not cb.allow():
         return None
-    url = best_oa_pdf_url(doi, email=email, client=client)
+
+    cache = _cache()
+    lookups = cache.get(_CACHE_KEY) or {}
+    if doi in lookups:
+        url = lookups[doi]
+    else:
+        url, definitive = _lookup_oa_pdf_url(doi, email=email, client=client)
+        if not definitive:
+            # API outage/transport error — feed the breaker, never cache, and
+            # never let it masquerade as a legitimate "no OA available".
+            cb.record_failure()
+            return None
+        cb.record_success()
+        lookups[doi] = url
+        cache.set(_CACHE_KEY, lookups)
+        cache.save()
     if not url:
         return None
     owns = client is None
