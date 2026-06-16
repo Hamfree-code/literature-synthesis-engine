@@ -6,8 +6,18 @@
 > ⚠️ **Small-corpus warning.** This brief is based on fewer than 10 deeply-analysed papers. Conclusions are hypothesis-generating only.
 {% endif %}
 
+{% if dd.confidence_framing and dd.confidence_framing.lead_with_limitation %}
+> ⚠️ **Low-confidence hypothesis for expert evaluation.** Confidence in the leading hypothesis is below 50/100. This document is framed as a *hypothesis for expert evaluation*, not a recommendation. Output specificity is capped to the strength of the evidence (see output-ceiling note below).
+{% endif %}
+
 {% if dd.investment_thesis_one_line %}
 > **{{ dd.investment_thesis_one_line }}**
+{% endif %}
+
+> {{ emcu_disclaimer }}
+
+{% if dd.output_gating %}
+> ℹ️ **Output ceiling:** `{{ dd.output_gating.ceiling }}` (max evidence tier in corpus: *{{ dd.output_gating.max_tier }}*). {% if dd.output_gating.removed %}The following were withheld because evidence is below threshold: {{ dd.output_gating.removed | join(', ') | replace('_', ' ') }}.{% endif %}
 {% endif %}
 
 ---
@@ -159,15 +169,45 @@ This brief was generated automatically by the Hams & Co. Research Division Liter
 
 ---
 
-## 7. Recommended Target Phenotype & Phase II Skeleton
+## 7. {% if dd.gaps_only %}Where Signal Clusters & What Evidence Is Missing{% else %}Recommended Target Phenotype & Phase II Skeleton{% endif %}
 
-{% if dd.recommended_target_phenotype %}
+{% if dd.gaps_only %}
+> ℹ️ The maximum evidence tier in this corpus is **{{ dd.output_gating.max_tier | default("speculative") }}**. Under the evidence-gated output ceiling, this brief emits **landscape + gaps only** — no Phase II skeleton, no sample-size calculation, no named drug candidates, no endpoint prescriptions. The following describes where signal clusters, what would need to be true to act, and what evidence is missing.
+
+{% if dd.gaps_only.where_signal_clusters %}
+**Where signal clusters:**
+{% for x in dd.gaps_only.where_signal_clusters %}
+- {{ x | cite }}
+{% endfor %}
+{% endif %}
+
+{% if dd.gaps_only.what_would_need_to_be_true_to_act %}
+**What would need to be true to act:**
+{% for x in dd.gaps_only.what_would_need_to_be_true_to_act %}
+- {{ x }}
+{% endfor %}
+{% endif %}
+
+{% if dd.gaps_only.what_evidence_is_missing %}
+**What evidence is missing:**
+{% for x in dd.gaps_only.what_evidence_is_missing %}
+- {{ x }}
+{% endfor %}
+{% endif %}
+
+{% if dd.recommended_target_phenotype and dd.recommended_target_phenotype.rationale %}
+{{ dd.recommended_target_phenotype.rationale | cite }}
+{% endif %}
+
+**Sample sizing:** {{ (dd.recommended_target_phenotype or {}).get("estimated_sample_size_basis", "no defensible effect-size estimate exists in this corpus; sizing is not computable") }}
+
+{% elif dd.recommended_target_phenotype %}
 > ℹ️ {{ dd.recommended_target_phenotype.preface_disclaimer | default("The following is a hypothesis-generating framework, not a clinical or investment recommendation. All design choices require independent expert validation.") }}
 
 ### Target phenotype: **{{ dd.recommended_target_phenotype.phenotype }}**
 
 {% if dd.recommended_target_phenotype.confidence_in_recommendation is defined %}
-**Confidence in recommendation:** {{ dd.recommended_target_phenotype.confidence_in_recommendation }} / 100 · GRADE-Moderate-or-higher supporting papers: {{ dd.recommended_target_phenotype.grade_moderate_or_higher_n | default(0) }} · Threshold met: {{ "yes" if dd.recommended_target_phenotype.threshold_met else "**no**" }}
+**Confidence in {{ (dd.confidence_framing or {}).get("noun", "recommendation") }}:** {{ dd.recommended_target_phenotype.confidence_in_recommendation }} / 100 · GRADE-Moderate-or-higher supporting papers: {{ dd.recommended_target_phenotype.grade_moderate_or_higher_n | default(0) }} · Threshold met: {{ "yes" if dd.recommended_target_phenotype.threshold_met else "**no**" }}
 {% endif %}
 
 {{ dd.recommended_target_phenotype.rationale | cite }}
@@ -197,6 +237,8 @@ This brief was generated automatically by the Hams & Co. Research Division Liter
 **Comparator:** {{ d.comparator }}
 
 **Sample-size basis:** {{ d.estimated_sample_size_basis }}
+{% else %}
+*No Phase II skeleton emitted — evidence is below the threshold required to specify protocol parameters.*
 {% endif %}
 
 #### Deal-breakers

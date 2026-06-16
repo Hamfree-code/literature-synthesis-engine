@@ -267,6 +267,7 @@ def build_markdown(analysis: dict, papers_by_id: dict[str, dict], citer: "Citati
         aggregates=aggregates,
         papers_by_id=papers_by_id,
         short_cite=short_cite,
+        emcu_disclaimer=emcu.EMCU_DISCLAIMER,
     )
 
     citer.resolve_unresolved_via_crossref()
@@ -296,7 +297,9 @@ def build_due_diligence_markdown(analysis: dict, papers_by_id: dict[str, dict], 
         n_papers=n_papers,
         n_deep=n_deep,
         dd=dd,
+        aggregates=aggregates,
         papers_by_id=papers_by_id,
+        emcu_disclaimer=emcu.EMCU_DISCLAIMER,
     )
 
     citer.resolve_unresolved_via_crossref()
@@ -328,6 +331,7 @@ def build_executive_summary_markdown(analysis: dict, papers_by_id: dict[str, dic
         n_papers=n_papers,
         n_deep=n_deep,
         exec=exec_data,
+        emcu_disclaimer=emcu.EMCU_DISCLAIMER,
     )
 
     return md_body, {

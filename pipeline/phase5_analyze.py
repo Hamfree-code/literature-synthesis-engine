@@ -809,7 +809,10 @@ def run() -> None:
         aggregates["evidence_bodies"] = evidence_bodies                     # WP-2 GRADE per outcome
         aggregates["normalisation_review"] = norm["normalisation_review"]    # WP-5/6 unmapped log
         aggregates["outcome_dictionary_version"] = norm["dictionary_version"]
-        aggregates["rob_instruments"] = v32.rob_assignments(deep_extractions)  # WP-3 design-matched
+        rob = v32.rob_assignments(deep_extractions)  # WP-3 design-matched
+        aggregates["rob_instruments"] = rob
+        aggregates["rob_instrument_counts"] = dict(Counter(a["primary_instrument"] for a in rob.values()))
+        aggregates["quadas_paper_count"] = sum(1 for a in rob.values() if a["quadas_applicable"])
         aggregates["rct_count"] = v32.rct_count(deep_extractions)            # WP-§1.3
         aggregates["gated_synthesis"] = v32.gated_synthesis_decisions(deep_extractions, condition)  # WP-6
         aggregates["output_ceiling_tier"] = ceiling_tier                     # WP-10
