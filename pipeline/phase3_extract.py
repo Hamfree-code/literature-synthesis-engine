@@ -1,12 +1,17 @@
-"""Phase 3: Extract structured data via Claude API.
+"""Phase 3: Extract structured data via a multi-provider engine.
 
-v3 (Master Improvement Spec v3.0 — Priority 2.1): two-step deep extraction
-with arbiter. Each paper is independently extracted by two Sonnet reviewers
-at different temperatures (A=0.1, B=0.3) and the two outputs are reconciled
-by a third Sonnet pass (arbiter, temp=0.0). The arbiter output is the
-canonical extraction stored downstream. When `settings.ARBITER_ENABLED` is
-false, the pipeline falls back to a single-pass extraction at temp=0.1 for
-cost-conscious runs.
+v3.1 — multi-provider two-step deep extraction with arbiter:
+  * Triage filter: Gemini Flash (cheap, high-volume abstract pass).
+  * Reviewer A: Claude Sonnet (Anthropic Batch API, temp 0.1).
+  * Reviewer B: Gemini Pro (async concurrent calls, temp 0.3).
+  * Arbiter: Claude Opus (Anthropic Batch API, temp 0.0) reconciles A+B.
+
+Using two different providers as reviewers reduces single-model bias before
+the arbiter reconciles them. Claude work rides the Anthropic Batch API (with
+the resume registry in utils.claude_client); Gemini work runs as bounded async
+calls with its own resume cache (reviewer_b_cache.jsonl). When
+`settings.ARBITER_ENABLED` is false, the pipeline falls back to a single-pass
+Claude Sonnet extraction for cost-conscious runs.
 """
 from __future__ import annotations
 # __APP_PATHS_INSTALLED__
@@ -20,7 +25,7 @@ from rich.console import Console
 
 from config.settings import settings
 from utils.checkpointing import Checkpoint
-from utils.claude_client import parse_json_response, poll_batch, sanitize_custom_id, submit_batch
+from utils.claude_client import forget_batch, parse_json_response, poll_batch, sanitize_custom_id, submit_batch
 
 console = Console()
 
@@ -77,7 +82,7 @@ def build_reviewer_request(paper: dict, *, temperature: float, suffix: str) -> d
         "custom_id": reviewer_custom_id(paper["id"], suffix),
         "params": {
             "model": settings.ANTHROPIC_SONNET_MODEL,
-            "max_tokens": 8192,
+            "max_tokens": 16384,  # 8192 truncated large full-text extractions
             "temperature": temperature,
             "messages": [{
                 "role": "user",
@@ -96,6 +101,23 @@ def build_deep_request(paper: dict) -> dict:
     return build_reviewer_request(paper, temperature=0.1, suffix="")
 
 
+def build_triage_prompt(paper: dict) -> str:
+    """Plain-string triage prompt for Gemini (no Anthropic-batch envelope).
+    Same content as build_triage_request: schema header + abstract."""
+    prompt = _topic_substitute(TRIAGE_PROMPT)
+    schema = prompt.split("ABSTRACT:")[0] + "ABSTRACT:"
+    return f"{schema}\n{paper.get('abstract', '')}"
+
+
+def build_reviewer_prompt(paper: dict) -> str:
+    """Plain-string deep-extraction prompt for the Gemini reviewer (Reviewer B).
+    Same schema/body content as build_reviewer_request."""
+    prompt = _topic_substitute(EXTRACT_PROMPT)
+    schema = prompt.split(_FULLTEXT_SENTINEL)[0] + _FULLTEXT_SENTINEL
+    body = paper.get("full_text") or paper.get("abstract") or ""
+    return f"{schema}\n{body}"
+
+
 def build_arbiter_request(paper: dict, reviewer_a: dict, reviewer_b: dict) -> dict:
     """Build a single arbiter request that reconciles two reviewer outputs.
     The reviewer JSONs are injected as inline text — placeholders must use
@@ -108,9 +130,12 @@ def build_arbiter_request(paper: dict, reviewer_a: dict, reviewer_b: dict) -> di
     return {
         "custom_id": reviewer_custom_id(paper["id"], "arb"),
         "params": {
-            "model": settings.ANTHROPIC_SONNET_MODEL,
-            "max_tokens": 8192,
-            "temperature": 0.0,
+            # Opus (the arbiter model) deprecated the `temperature` parameter and
+            # rejects any request that sends it ("`temperature` is deprecated for
+            # this model."), so we must NOT pass temperature here — unlike the
+            # Sonnet reviewer requests above, which still accept it.
+            "model": settings.ANTHROPIC_OPUS_MODEL,   # arbiter runs on Opus
+            "max_tokens": 16384,  # match reviewer cap so reconciled JSON isn't truncated
             "messages": [{"role": "user", "content": prompt}],
         },
     }
@@ -135,31 +160,37 @@ def run_triage(max_papers: int | None = None) -> None:
     papers = [json.loads(line) for line in filtered_papers_path.open(encoding="utf-8")]
     if max_papers:
         papers = papers[:max_papers]
-    console.print(f"Triaging {len(papers)} papers via Batch API...")
+    console.print(f"Triaging {len(papers)} papers via Gemini {settings.GEMINI_FLASH_MODEL}...")
 
-    cid_to_pid = {sanitize_custom_id(p["id"]): p["id"] for p in papers}
+    import asyncio
 
-    all_results = []
-    for i in range(0, len(papers), 1000):
-        chunk = papers[i : i + 1000]
-        requests = [build_triage_request(p) for p in chunk]
-        batch_id = submit_batch(requests)
-        results = poll_batch(batch_id)
-        all_results.extend(results)
+    from utils.gemini_client import gather_json
+
+    # Gemini runs as bounded concurrent async calls (no Anthropic batch envelope).
+    prompts = [(p["id"], build_triage_prompt(p)) for p in papers]
+    parsed_by_pid, failures = asyncio.run(
+        gather_json(settings.GEMINI_FLASH_MODEL, prompts, max_tokens=1024, temperature=0.0)
+    )
 
     out = app_data("data/filtered/triage_results.jsonl")
     out.parent.mkdir(parents=True, exist_ok=True)
     count = 0
     with out.open("w", encoding="utf-8") as f:
-        for r in all_results:
-            if r.result.type == "succeeded":
-                parsed = parse_json_response(r.result.message.content[0].text)
-                if parsed:
-                    paper_id = cid_to_pid.get(r.custom_id, r.custom_id)
-                    f.write(json.dumps({"paper_id": paper_id, **parsed}) + "\n")
-                    count += 1
+        for paper_id, parsed in parsed_by_pid.items():
+            f.write(json.dumps({"paper_id": paper_id, **parsed}) + "\n")
+            count += 1
 
-    console.print(f"Triage complete: {count}/{len(papers)} extracted")
+    fail_out = app_data("data/filtered/triage_failures.jsonl")
+    if failures:
+        with fail_out.open("w", encoding="utf-8") as ff:
+            for x in failures:
+                ff.write(json.dumps(
+                    {"paper_id": x["key"], "reason": x["reason"], "detail": x.get("detail", "")},
+                    ensure_ascii=False) + "\n")
+    elif fail_out.exists():
+        fail_out.unlink()
+
+    console.print(f"Triage complete: {count}/{len(papers)} extracted ({len(failures)} failed)")
     checkpoint.mark_complete()
 
 
@@ -260,55 +291,94 @@ def _run_single_pass(deep_papers: list[dict]) -> None:
     cid_to_pid = {reviewer_custom_id(p["id"], ""): p["id"] for p in deep_papers}
     requests = [build_reviewer_request(p, temperature=0.1, suffix="") for p in deep_papers]
     console.print(f"  Submitting single-pass batch ({len(requests)} requests)...")
-    batch_id = submit_batch(requests)
+    batch_id = submit_batch(requests, label="deep_single")
     results = poll_batch(batch_id)
     parsed, failures = _parse_batch_results(results, cid_to_pid)
     _write_outputs(parsed, failures, len(deep_papers))
+    forget_batch("deep_single")
+
+
+def _reviewer_b_cache_path() -> Path:
+    return app_data("data/filtered/reviewer_b_cache.jsonl")
+
+
+def _load_reviewer_b_cache() -> dict[str, dict]:
+    """Reviewer B (Gemini) is not on the Anthropic batch registry, so it gets
+    its own resume cache: a crash mid-arbiter must not force re-paying Gemini."""
+    path = _reviewer_b_cache_path()
+    out: dict[str, dict] = {}
+    if path.exists():
+        for line in path.open(encoding="utf-8"):
+            try:
+                rec = json.loads(line)
+                out[rec["paper_id"]] = rec["extraction"]
+            except (json.JSONDecodeError, KeyError):
+                pass
+    return out
+
+
+def _append_reviewer_b_cache(new_b: dict[str, dict]) -> None:
+    if not new_b:
+        return
+    path = _reviewer_b_cache_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        for pid, ext in new_b.items():
+            f.write(json.dumps({"paper_id": pid, "extraction": ext}, ensure_ascii=False) + "\n")
 
 
 def _run_arbiter_pass(deep_papers: list[dict]) -> None:
-    """Two-step extraction + arbiter (Master Improvement Spec v3.0 — Priority 2.1)."""
-    # ---- Step 1: Reviewers A and B in a single batch (paired) -------------
-    cid_a_to_pid: dict[str, str] = {}
-    cid_b_to_pid: dict[str, str] = {}
-    reviewer_requests = []
-    for p in deep_papers:
-        cid_a = reviewer_custom_id(p["id"], "a")
-        cid_b = reviewer_custom_id(p["id"], "b")
-        cid_a_to_pid[cid_a] = p["id"]
-        cid_b_to_pid[cid_b] = p["id"]
-        reviewer_requests.append(build_reviewer_request(p, temperature=0.1, suffix="a"))
-        reviewer_requests.append(build_reviewer_request(p, temperature=0.3, suffix="b"))
+    """Multi-provider two-step extraction + arbiter.
 
-    console.print(f"  Reviewer pass: submitting {len(reviewer_requests)} requests (A+B per paper)...")
-    reviewer_batch_id = submit_batch(reviewer_requests)
-    reviewer_results = poll_batch(reviewer_batch_id)
+    Reviewer A = Claude Sonnet (Anthropic Batch), Reviewer B = Gemini Pro (async),
+    arbiter = Claude Opus (Anthropic Batch). A and B can no longer share a batch,
+    so each provider has its own resume path.
+    """
+    import asyncio
 
-    parsed_a, fail_a = _parse_batch_results(reviewer_results, cid_a_to_pid)
-    parsed_b, fail_b = _parse_batch_results(reviewer_results, cid_b_to_pid)
-    # _parse_batch_results was called twice on the same result list — each call
-    # also generates spurious failure entries for the OTHER reviewer's IDs. We
-    # discard those.
-    fail_a = [x for x in fail_a if x["paper_id"] in cid_a_to_pid.values()]
-    fail_b = [x for x in fail_b if x["paper_id"] in cid_b_to_pid.values()]
+    from utils.gemini_client import gather_json
+
+    # ---- Step 1a: Reviewer A — Claude Sonnet via Anthropic Batch ----------
+    cid_a_to_pid = {reviewer_custom_id(p["id"], "a"): p["id"] for p in deep_papers}
+    a_requests = [build_reviewer_request(p, temperature=0.1, suffix="a") for p in deep_papers]
+    console.print(f"  Reviewer A (Claude Sonnet): submitting {len(a_requests)} requests...")
+    a_batch_id = submit_batch(a_requests, label="deep_reviewers_a")
+    parsed_a, fail_a = _parse_batch_results(poll_batch(a_batch_id), cid_a_to_pid)
+
+    # ---- Step 1b: Reviewer B — Gemini Pro via async, with resume cache ----
+    parsed_b = _load_reviewer_b_cache()
+    todo_b = [p for p in deep_papers if p["id"] not in parsed_b]
+    if todo_b:
+        console.print(
+            f"  Reviewer B (Gemini {settings.GEMINI_PRO_MODEL}): {len(todo_b)} papers "
+            f"({len(parsed_b)} from cache)..."
+        )
+        prompts_b = [(p["id"], build_reviewer_prompt(p)) for p in todo_b]
+        new_b, fail_b_raw = asyncio.run(
+            gather_json(settings.GEMINI_PRO_MODEL, prompts_b, max_tokens=24576, temperature=0.3)
+        )
+        _append_reviewer_b_cache(new_b)
+        parsed_b.update(new_b)
+    else:
+        fail_b_raw = []
+        console.print(f"  Reviewer B (Gemini): all {len(parsed_b)} papers served from cache")
 
     console.print(
         f"  Reviewer pass complete: A={len(parsed_a)}/{len(deep_papers)}, "
         f"B={len(parsed_b)}/{len(deep_papers)}"
     )
 
-    # ---- Step 2: Arbiter pass for papers where BOTH reviewers succeeded ----
+    # ---- Step 2: Arbiter (Claude Opus) for papers where BOTH succeeded ----
     arbiter_ready = [p for p in deep_papers if p["id"] in parsed_a and p["id"] in parsed_b]
     arbiter_skipped: dict[str, dict] = {}
     for p in deep_papers:
-        if p["id"] in parsed_a and p["id"] not in parsed_b:
-            arbiter_skipped[p["id"]] = parsed_a[p["id"]]
-            arbiter_skipped[p["id"]]["reconciliation_triggered"] = False
-            arbiter_skipped[p["id"]]["arbiter_notes"] = "Reviewer B failed; using Reviewer A unilaterally."
-        elif p["id"] in parsed_b and p["id"] not in parsed_a:
-            arbiter_skipped[p["id"]] = parsed_b[p["id"]]
-            arbiter_skipped[p["id"]]["reconciliation_triggered"] = False
-            arbiter_skipped[p["id"]]["arbiter_notes"] = "Reviewer A failed; using Reviewer B unilaterally."
+        pid = p["id"]
+        if pid in parsed_a and pid not in parsed_b:
+            arbiter_skipped[pid] = {**parsed_a[pid], "reconciliation_triggered": False,
+                                    "arbiter_notes": "Reviewer B (Gemini) failed; using Reviewer A unilaterally."}
+        elif pid in parsed_b and pid not in parsed_a:
+            arbiter_skipped[pid] = {**parsed_b[pid], "reconciliation_triggered": False,
+                                    "arbiter_notes": "Reviewer A (Claude) failed; using Reviewer B unilaterally."}
 
     if arbiter_ready:
         cid_arb_to_pid = {reviewer_custom_id(p["id"], "arb"): p["id"] for p in arbiter_ready}
@@ -316,10 +386,9 @@ def _run_arbiter_pass(deep_papers: list[dict]) -> None:
             build_arbiter_request(p, parsed_a[p["id"]], parsed_b[p["id"]])
             for p in arbiter_ready
         ]
-        console.print(f"  Arbiter pass: submitting {len(arbiter_requests)} reconciliations...")
-        arb_batch_id = submit_batch(arbiter_requests)
-        arb_results = poll_batch(arb_batch_id)
-        parsed_arb, fail_arb = _parse_batch_results(arb_results, cid_arb_to_pid)
+        console.print(f"  Arbiter (Claude Opus): submitting {len(arbiter_requests)} reconciliations...")
+        arb_batch_id = submit_batch(arbiter_requests, label="deep_arbiter")
+        parsed_arb, fail_arb = _parse_batch_results(poll_batch(arb_batch_id), cid_arb_to_pid)
     else:
         parsed_arb = {}
         fail_arb = []
@@ -334,16 +403,24 @@ def _run_arbiter_pass(deep_papers: list[dict]) -> None:
     for pid, single in arbiter_skipped.items():
         final_extractions[pid] = single
 
-    # Combine failures: a paper that failed BOTH reviewers OR was a single
-    # reviewer success but arbiter failed.
+    # Combine failures: a paper that failed BOTH reviewers OR succeeded with one
+    # reviewer but the arbiter failed. fail_a uses "paper_id"; Gemini fail uses "key".
     combined_failures: list[dict] = []
     for f in fail_a:
         if f["paper_id"] not in parsed_b:
             combined_failures.append({**f, "reason": f"reviewer_a_{f['reason']}_AND_b_failed"})
+    for f in fail_b_raw:
+        if f["key"] not in parsed_a:
+            combined_failures.append({"paper_id": f["key"], "detail": f.get("detail", ""),
+                                      "reason": f"reviewer_b_{f['reason']}_AND_a_failed"})
     for f in fail_arb:
         combined_failures.append({**f, "reason": f"arbiter_{f['reason']}"})
 
     _write_outputs(final_extractions, combined_failures, len(deep_papers))
+    # Consumed and persisted — release the paid Anthropic batch ids and B cache.
+    forget_batch("deep_reviewers_a")
+    forget_batch("deep_arbiter")
+    _reviewer_b_cache_path().unlink(missing_ok=True)
 
 
 def _run_umls_normalization() -> None:

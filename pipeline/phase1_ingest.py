@@ -213,7 +213,11 @@ async def fetch_pmc_fulltext_structured(pmc_id: str, client: httpx.AsyncClient) 
 
 
 async def enrich_with_fulltext(paper_ids: list[str]) -> None:
-    """Fetch and store full text in local cache + Supabase for given paper IDs."""
+    """Fetch and store full text in local cache (+ Supabase if configured).
+
+    The local JSONL cache is written FIRST and Supabase is best-effort: a
+    storage outage must never discard full text we just paid NCBI bandwidth to
+    fetch (it would force a re-fetch on the next run)."""
     from utils.supabase_client import sb
 
     cache_path = app_data("data/raw/fulltext_cache.jsonl")
@@ -226,29 +230,171 @@ async def enrich_with_fulltext(paper_ids: list[str]) -> None:
             except (json.JSONDecodeError, KeyError):
                 pass
 
+    # OpenAlex (and some other) papers carry an open-access PDF URL; use it as a
+    # full-text source / fallback when PMC XML isn't available.
+    oa_urls: dict[str, str] = {}
+    papers_path = app_data("data/raw/papers.jsonl")
+    if papers_path.exists():
+        for line in papers_path.open(encoding="utf-8"):
+            try:
+                p = json.loads(line)
+                if p.get("oa_pdf_url"):
+                    oa_urls[p["id"]] = p["oa_pdf_url"]
+            except json.JSONDecodeError:
+                pass
+
     ok = 0
     skipped_cached = 0
     miss = 0
+    src = {"pmc": 0, "oa_pdf": 0}
     async with httpx.AsyncClient(http2=True, limits=httpx.Limits(max_connections=3)) as client:
         with cache_path.open("a", encoding="utf-8") as cache_f:
             for pid in paper_ids:
                 if pid in cached_ids:
                     skipped_cached += 1
                     continue
-                raw_id = pid.replace("PMC", "")
-                if pid.startswith("medrxiv_"):
-                    miss += 1
-                    continue
-                full_text = await fetch_pmc_fulltext(raw_id, client)
+                full_text = None
+                if pid.startswith("PMC"):
+                    full_text = await fetch_pmc_fulltext(pid.replace("PMC", ""), client)
+                    if full_text:
+                        src["pmc"] += 1
+                # Fallback / non-PMC: open-access PDF if we have a URL.
+                if not full_text and oa_urls.get(pid):
+                    full_text = await _fetch_oa_pdf_text(oa_urls[pid], client)
+                    if full_text:
+                        src["oa_pdf"] += 1
                 if full_text:
-                    sb().table("papers").update({"full_text": full_text}).eq("id", pid).execute()
+                    # Cache first — this is the durable copy.
                     cache_f.write(json.dumps({"paper_id": pid, "full_text": full_text}) + "\n")
+                    cache_f.flush()
                     ok += 1
+                    # Then best-effort persist to Supabase.
+                    if settings.supabase_enabled:
+                        try:
+                            sb().table("papers").update({"full_text": full_text}).eq("id", pid).execute()
+                        except Exception as e:
+                            console.print(f"[yellow]Supabase full_text update failed for {pid}: {e}[/]")
                 else:
                     miss += 1
                 await asyncio.sleep(0.4)
 
-    console.print(f"Full-text enrichment: {ok} fetched, {skipped_cached} cached, {miss} unavailable")
+    console.print(
+        f"Full-text enrichment: {ok} fetched ({src['pmc']} PMC, {src['oa_pdf']} OA-PDF), "
+        f"{skipped_cached} cached, {miss} unavailable"
+    )
+
+
+async def _fetch_oa_pdf_text(url: str, client: httpx.AsyncClient) -> str | None:
+    """Best-effort: download an open-access PDF and extract its text via pypdf.
+    Never raises — full-text enrichment is optional."""
+    try:
+        r = await client.get(url, timeout=60, follow_redirects=True)
+        r.raise_for_status()
+        import io
+
+        from pypdf import PdfReader
+
+        reader = PdfReader(io.BytesIO(r.content))
+        text = "\n".join((page.extract_text() or "") for page in reader.pages).strip()
+        return text or None
+    except Exception:
+        return None
+
+
+OPENALEX_WORKS_URL = "https://api.openalex.org/works"
+
+
+def reconstruct_abstract(inverted_index: dict | None) -> str | None:
+    """Rebuild abstract text from OpenAlex's abstract_inverted_index
+    ({word: [positions]}). Returns None when absent/empty."""
+    if not inverted_index:
+        return None
+    positions: list[tuple[int, str]] = []
+    for word, idxs in inverted_index.items():
+        for i in idxs:
+            positions.append((i, word))
+    if not positions:
+        return None
+    positions.sort(key=lambda t: t[0])
+    return " ".join(w for _, w in positions) or None
+
+
+def _openalex_to_paper(work: dict) -> dict | None:
+    """Map an OpenAlex work to the pipeline's standard paper schema. Returns
+    None when there is no usable abstract (mirrors the PMC parser)."""
+    abstract = reconstruct_abstract(work.get("abstract_inverted_index"))
+    if not abstract:
+        return None
+    doi = (work.get("doi") or "").replace("https://doi.org/", "").strip() or None
+    oa = work.get("best_oa_location") or {}
+    authors = [
+        a.get("author", {}).get("display_name")
+        for a in (work.get("authorships") or [])
+        if a.get("author", {}).get("display_name")
+    ]
+    journal = (((work.get("primary_location") or {}).get("source")) or {}).get("display_name")
+    oid = (work.get("id") or "").rsplit("/", 1)[-1]
+    return {
+        "id": f"openalex_{oid}",
+        "source": "openalex",
+        "title": work.get("title"),
+        "authors": authors,
+        "abstract": abstract,
+        "year": work.get("publication_year"),
+        "journal": journal or "OpenAlex",
+        "url": work.get("id"),
+        "doi": doi,
+        "full_text": None,
+        "pmc_id": None,
+        "oa_pdf_url": oa.get("pdf_url"),
+    }
+
+
+async def fetch_openalex_papers(
+    query_terms: list[str],
+    max_results: int = 1000,
+    start_year: int = 2020,
+) -> list[dict]:
+    """Discover works via the OpenAlex /works API (cursor-paginated).
+
+    Terms are OR-combined in a title+abstract search filter. Requires the free
+    OPENALEX_API_KEY since 2026-02-13 (100 credits/day without one)."""
+    terms = [t.strip() for t in query_terms if t and t.strip()]
+    if not terms:
+        return []
+    search_val = "|".join(terms)
+    filt = f"title_and_abstract.search:{search_val},from_publication_date:{start_year}-01-01"
+    mailto = settings.OPENALEX_MAILTO or settings.NCBI_EMAIL or ""
+    headers = {"User-Agent": f"LongCOVIDPipeline/3.1 (mailto:{mailto})"} if mailto else {}
+
+    results: list[dict] = []
+    cursor = "*"
+    console.print(f"[dim]OpenAlex: searching works for {terms[:5]}[/]")
+    async with httpx.AsyncClient(timeout=45) as client:
+        while cursor and len(results) < max_results:
+            params: dict = {"filter": filt, "per-page": 200, "cursor": cursor}
+            if settings.OPENALEX_API_KEY:
+                params["api_key"] = settings.OPENALEX_API_KEY
+            if mailto:
+                params["mailto"] = mailto
+            try:
+                r = await client.get(OPENALEX_WORKS_URL, params=params, headers=headers)
+                r.raise_for_status()
+                data = r.json()
+            except Exception as e:
+                console.print(f"[yellow]OpenAlex error: {e}[/]")
+                break
+            for work in data.get("results", []):
+                paper = _openalex_to_paper(work)
+                if paper:
+                    results.append(paper)
+                    if len(results) >= max_results:
+                        break
+            cursor = (data.get("meta") or {}).get("next_cursor")
+            await asyncio.sleep(0.2)
+
+    console.print(f"OpenAlex: fetched {len(results)} works with abstracts")
+    return results[:max_results]
 
 
 async def fetch_medrxiv_papers(
@@ -444,6 +590,31 @@ async def run(max_papers: int = 5000, topic: str | None = None, mesh_terms: str 
         for p in new_medrxiv:
             if p.get("abstract"):
                 f.write(json.dumps(p) + "\n")
+
+    # ── OpenAlex discovery (3rd source) ──────────────────────────────────
+    if settings.OPENALEX_ENABLED:
+        console.print("[cyan]Fetching OpenAlex works...[/]")
+        seen_dois: set[str] = set(pmc_dois)
+        for p in new_medrxiv:
+            if p.get("doi"):
+                seen_dois.add(p["doi"].lower())
+        oa_terms = synonyms if synonyms else (
+            ["long covid", "post-acute sequelae", "PASC", "post-COVID condition"]
+            if ("covid" in topic_low or "pasc" in topic_low) else [topic_low]
+        )
+        openalex_papers = await fetch_openalex_papers(
+            query_terms=oa_terms,
+            max_results=min(2000, max_papers // 2),
+        )
+        new_openalex = [
+            p for p in openalex_papers
+            if not p.get("doi") or p["doi"].lower() not in seen_dois
+        ]
+        console.print(f"OpenAlex: {len(openalex_papers)} candidates, {len(new_openalex)} unique after dedupe")
+        with out_path.open("a", encoding="utf-8") as f:
+            for p in new_openalex:
+                if p.get("abstract"):
+                    f.write(json.dumps(p) + "\n")
 
     checkpoint.mark_complete()
     console.print("[green]Phase 1 complete.[/]")

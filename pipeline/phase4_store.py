@@ -8,6 +8,7 @@ from pathlib import Path
 
 from rich.console import Console
 
+from config.settings import settings
 from utils.checkpointing import Checkpoint
 from utils.supabase_client import store_provenance, upsert_extraction, upsert_papers_batch
 
@@ -151,6 +152,14 @@ def run() -> None:
     checkpoint = Checkpoint("phase4_store")
     if checkpoint.is_complete():
         console.print("[green]Phase 4 already complete. Skipping.[/]")
+        return
+
+    if not settings.supabase_enabled:
+        console.print(
+            "[yellow]Phase 4 skipped: Supabase not configured (SUPABASE_URL/KEY empty). "
+            "Extractions remain in data/filtered/*.jsonl; Phase 5 reads those directly.[/]"
+        )
+        checkpoint.mark_complete()
         return
 
     console.print("[bold cyan]Phase 4: Persisting to Supabase[/]")

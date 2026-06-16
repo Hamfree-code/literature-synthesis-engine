@@ -5,8 +5,11 @@
 flask>=3.0
 jinja2>=3.1
 
-# Anthropic SDK (Claude Haiku 4.5 + Sonnet 4.6 — triage, deep extraction, synthesis, arbiter)
+# Anthropic SDK (Claude Sonnet 4.6 Reviewer A + Opus 4.8 arbiter + synthesis)
 anthropic>=0.40
+
+# Google Gemini SDK (Gemini Flash triage + Gemini Pro deep-extraction Reviewer B)
+google-genai>=0.3
 
 # HTTP client with HTTP/2 for NCBI + biorxiv + CrossRef
 httpx[http2]>=0.27

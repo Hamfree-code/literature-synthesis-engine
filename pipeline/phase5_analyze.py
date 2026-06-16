@@ -481,6 +481,21 @@ def compute_methodology_quality(deep_path: Path) -> dict:
     }
 
 
+def _consensus_from_counts(certainty_counts: dict, n: int) -> CalibratedCertainty:
+    """Map a distribution of per-paper certainty labels to a single consensus
+    level. Shared by the free-text and CUI-canonical aggregation paths so both
+    apply identical thresholds."""
+    if certainty_counts["contradicted"] > 0:
+        return CalibratedCertainty.CONTRADICTED
+    if n >= 5 and (certainty_counts["established"] + certainty_counts["probable"]) / n >= 0.6:
+        if certainty_counts["established"] / n >= 0.4:
+            return CalibratedCertainty.ESTABLISHED
+        return CalibratedCertainty.PROBABLE
+    if n >= 2:
+        return CalibratedCertainty.POSSIBLE
+    return CalibratedCertainty.SPECULATIVE
+
+
 def propagate_uncertainty(deep_extractions: list[dict]) -> dict:
     """Aggregate per-paper calibrated certainty into cross-paper symptom-level consensus."""
     symptom_data: dict[str, list[dict]] = defaultdict(list)
@@ -503,17 +518,7 @@ def propagate_uncertainty(deep_extractions: list[dict]) -> dict:
             if c in certainty_counts:
                 certainty_counts[c] += 1
 
-        if certainty_counts["contradicted"] > 0:
-            consensus = CalibratedCertainty.CONTRADICTED
-        elif n >= 5 and (certainty_counts["established"] + certainty_counts["probable"]) / n >= 0.6:
-            if certainty_counts["established"] / n >= 0.4:
-                consensus = CalibratedCertainty.ESTABLISHED
-            else:
-                consensus = CalibratedCertainty.PROBABLE
-        elif n >= 2:
-            consensus = CalibratedCertainty.POSSIBLE
-        else:
-            consensus = CalibratedCertainty.SPECULATIVE
+        consensus = _consensus_from_counts(certainty_counts, n)
 
         prefix = CERTAINTY_LANGUAGE[consensus]
         statement = f"{prefix} that {symptom} is a Long COVID manifestation (extraction confidence: {mean_conf:.2f}, n={n})."
@@ -538,6 +543,104 @@ def build_uncertainty_report_section(consensus_data: dict) -> dict:
             reverse=True,
         )
     return by_certainty
+
+
+def build_verbatim_cui_map(norm_path: Path) -> dict[str, dict]:
+    """Build a {lowercased verbatim_text → {cui, mesh_heading}} map from the
+    Phase-3 UMLS normalisation output (normalized_entities.jsonl).
+
+    Only entities with a non-empty CUI contribute. When a verbatim string maps
+    to several CUIs across papers (LLM disagreement), the most frequently
+    assigned CUI wins — that is the canonical choice."""
+    if not norm_path.exists():
+        return {}
+    # verbatim -> Counter of (cui, mesh) -> frequency
+    votes: dict[str, Counter[tuple[str, str]]] = defaultdict(Counter)
+    for line in norm_path.open(encoding="utf-8"):
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        for e in rec.get("entities") or []:
+            cui = (e.get("umls_cui") or "").strip()
+            if not cui:
+                continue
+            verbatim = (e.get("verbatim_text") or "").strip().lower()
+            if not verbatim:
+                continue
+            mesh = (e.get("mesh_heading") or "").strip()
+            votes[verbatim][(cui, mesh)] += 1
+
+    out: dict[str, dict] = {}
+    for verbatim, counter in votes.items():
+        (cui, mesh), _ = counter.most_common(1)[0]
+        out[verbatim] = {"cui": cui, "mesh_heading": mesh}
+    return out
+
+
+def canonicalize_consensus_by_cui(consensus: dict, verbatim_to_cui: dict[str, dict]) -> dict:
+    """Regroup the free-text symptom consensus (output of ``propagate_uncertainty``)
+    by canonical UMLS CUI, merging synonyms that share a CUI into one entry.
+
+    Symptoms whose verbatim text has no known CUI are kept un-merged under a
+    ``"verbatim:<text>"`` key and flagged ``canonical=False`` so the dilution is
+    visible rather than silent. Merged entries recompute their consensus level
+    from the pooled certainty distribution via the same thresholds as the
+    free-text path."""
+    grouped: dict[str, dict] = {}
+
+    def _slot(key: str, canonical: bool, label: str, mesh: str = "") -> dict:
+        if key not in grouped:
+            grouped[key] = {
+                "canonical": canonical,
+                "cui": key if canonical else None,
+                "mesh_heading": mesh or None,
+                "members": [],
+                "n_papers": 0,
+                "certainty_distribution": {c.value: 0 for c in CalibratedCertainty},
+                "_conf_weighted_sum": 0.0,
+                "label": label,
+            }
+        return grouped[key]
+
+    for symptom, data in consensus.items():
+        mapping = verbatim_to_cui.get(symptom)
+        if mapping and mapping.get("cui"):
+            slot = _slot(mapping["cui"], True, mapping["cui"], mapping.get("mesh_heading", ""))
+        else:
+            slot = _slot(f"verbatim:{symptom}", False, symptom)
+
+        n = data.get("n_papers", 0)
+        slot["members"].append(symptom)
+        slot["n_papers"] += n
+        slot["_conf_weighted_sum"] += (data.get("mean_extraction_confidence") or 0.0) * n
+        for level, cnt in (data.get("certainty_distribution") or {}).items():
+            if level in slot["certainty_distribution"]:
+                slot["certainty_distribution"][level] += cnt
+
+    results: dict[str, dict] = {}
+    for key, slot in grouped.items():
+        n = slot["n_papers"]
+        mean_conf = (slot["_conf_weighted_sum"] / n) if n else 0.0
+        consensus_level = _consensus_from_counts(slot["certainty_distribution"], n)
+        prefix = CERTAINTY_LANGUAGE[consensus_level]
+        label = slot["mesh_heading"] or slot["label"]
+        statement = (
+            f"{prefix} that {label} is a Long COVID manifestation "
+            f"(extraction confidence: {mean_conf:.2f}, n={n})."
+        )
+        results[key] = {
+            "canonical": slot["canonical"],
+            "cui": slot["cui"],
+            "mesh_heading": slot["mesh_heading"],
+            "members": sorted(slot["members"]),
+            "n_papers": n,
+            "mean_extraction_confidence": round(mean_conf, 3),
+            "certainty_distribution": slot["certainty_distribution"],
+            "consensus_certainty": consensus_level.value,
+            "consensus_statement": statement,
+        }
+    return results
 
 
 def _slim_deep(d: dict) -> dict:
@@ -763,6 +866,27 @@ def run() -> None:
         calibrated_consensus = propagate_uncertainty(deep_extractions)
         aggregates["calibrated_consensus"] = calibrated_consensus
         aggregates["findings_by_certainty"] = build_uncertainty_report_section(calibrated_consensus)
+
+        # v3.1: collapse free-text symptom synonyms onto canonical UMLS CUIs
+        # using the Phase-3 normalisation output, so consensus is not diluted
+        # across different spellings of the same concept. Additive — the
+        # free-text consensus above is retained for backward compatibility.
+        norm_path = app_data("data/filtered/normalized_entities.jsonl")
+        verbatim_to_cui = build_verbatim_cui_map(norm_path)
+        if verbatim_to_cui:
+            canonical = canonicalize_consensus_by_cui(calibrated_consensus, verbatim_to_cui)
+            n_merged = sum(1 for v in canonical.values() if v["canonical"] and len(v["members"]) > 1)
+            aggregates["calibrated_consensus_by_cui"] = canonical
+            aggregates["cui_canonicalization"] = {
+                "verbatim_terms_mapped": len(verbatim_to_cui),
+                "canonical_concepts": sum(1 for v in canonical.values() if v["canonical"]),
+                "uncanonicalized_terms": sum(1 for v in canonical.values() if not v["canonical"]),
+                "concepts_with_merged_synonyms": n_merged,
+            }
+            console.print(
+                f"CUI canonicalization: {len(verbatim_to_cui)} terms mapped, "
+                f"{n_merged} concepts merged from synonyms"
+            )
 
         # ── Methodological synthesis (Siciliano 2024 emulation) ──────────
         quadas_rows = collect_quadas_scores(deep_path)

@@ -4,6 +4,60 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.1.0] — 2026-06-16
+
+Multi-provider extraction engine. The two-step arbiter protocol now spans two
+model families: triage and deep-extraction Reviewer B run on Google Gemini,
+while Reviewer A and the arbiter run on Anthropic Claude.
+
+### Added
+
+- **Multi-provider extraction engine.** `utils/gemini_client.py` wraps the
+  Gemini API (`google-genai` SDK) as concurrency-bounded async calls
+  (`gather_json`, capped by `settings.GEMINI_CONCURRENCY`). Triage runs on
+  `GEMINI_FLASH_MODEL` (`gemini-3.5-flash`); deep-extraction Reviewer B runs on
+  `GEMINI_PRO_MODEL` (`gemini-3.1-pro`). Reviewer A stays on Claude Sonnet 4.6
+  and the arbiter moves to Claude Opus 4.8 (`ANTHROPIC_OPUS_MODEL`). Reviewer B
+  keeps its own resume cache (`reviewer_b_cache.jsonl`) so a crash mid-arbiter
+  does not force re-paying Gemini.
+- **OpenAlex ingestion source.** `pipeline.phase1_ingest.fetch_openalex_papers`
+  discovers works via the OpenAlex `/works` API (cursor-paginated), rebuilds
+  abstracts from the inverted index, and maps them to the standard paper
+  schema. Toggle `OPENALEX_ENABLED`; free `OPENALEX_API_KEY` recommended.
+- **Cost guardrails (preflight).** `utils/preflight.py` validates configuration
+  and prompt files and estimates run cost before any paid batch is submitted;
+  the run aborts when the estimate exceeds `settings.MAX_SPEND_USD` (default
+  $25). `BATCH_MAX_POLL_HOURS` (default 26h) bounds Batch API polling.
+- **Resumable paid batches.** `utils/claude_client.py` persists batch ids to a
+  registry (`data/checkpoints/batches.json`) so a later run resumes an
+  in-flight paid batch instead of resubmitting it.
+- **CUI consensus canonicalisation.** `pipeline/phase5_analyze.py`
+  (`build_verbatim_cui_map` / `canonicalize_consensus_by_cui`) collapses
+  free-text symptom/phenotype synonyms onto canonical UMLS CUIs before
+  cross-paper aggregation.
+- **First automated test suite.** `tests/` (pytest, 58 tests) covering the
+  Phase 5 stats core, preflight/guardrails, OpenAlex mapping, and the Gemini
+  client.
+
+### Changed
+
+- Arbiter moved from Claude Sonnet to Claude Opus 4.8.
+- Triage moved from Claude Haiku (Batch API) to Gemini Flash (async). The
+  `config/prompts/triage_haiku.txt` / `*_sonnet.txt` filenames are retained for
+  path stability and are now provider-agnostic templates reused by Gemini.
+- Reviewer A and Reviewer B can no longer share a single Anthropic batch, since
+  they run on different providers.
+- The runner now bills on the actual extracted-paper count, and Supabase phases
+  no-op (rather than crash) when Supabase is unconfigured
+  (`settings.supabase_enabled`).
+
+### Fixed
+
+- **Arbiter requests silently rejected.** Opus 4.8 deprecated the `temperature`
+  parameter; `build_arbiter_request` in `pipeline/phase3_extract.py` no longer
+  sends it (Sonnet reviewer requests still do). On an early big run this had
+  rejected all 118 arbiter calls at validation.
+
 ## [3.0.0] — 2026-05-17
 
 Major architectural upgrade per the Master Improvement Spec v3.0

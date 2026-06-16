@@ -1,11 +1,26 @@
 # Technical Documentation — Literature Synthesis Engine
 
 **Author:** Hamsa
-**Last revised:** 2026-05-17 (Master Improvement Spec v3.0 — full architectural upgrade)
-**Build version:** v3.0 (`LongCovidResearch.exe`, 95.77 MB, 2026-05-17 18:13:37)
+**Last revised:** 2026-06-16 (v3.1 — multi-provider extraction engine)
+**Build version:** v3.1
 **Scope:** the canonical Windows build at `C:\Users\Hamsa\longcovid-app-build\` (the earlier WSL source at `~/projects/long-covid-pipeline/` is stale and is not described here).
 
 ---
+
+> **v3.1 update (2026-06-16) — read this first.** The extraction engine is now
+> **multi-provider**. Where this document says "Haiku triage", triage now runs on
+> **Gemini Flash**; where it says the two deep-extraction reviewers are both
+> Sonnet, **Reviewer A is Claude Sonnet 4.6 and Reviewer B is Gemini Pro**, and
+> the **arbiter is Claude Opus 4.8** (the `temperature` parameter is omitted
+> because Opus 4.8 deprecated it). Gemini work runs as concurrency-bounded async
+> calls in `utils/gemini_client.py`; Claude work stays on the Anthropic Batch
+> API with a resumable batch registry. A third ingestion source, **OpenAlex**,
+> joins PMC and medRxiv in Phase 1. A preflight budget gate (`utils/preflight.py`,
+> `settings.MAX_SPEND_USD`) aborts before any paid batch. The
+> `config/prompts/*_haiku.txt` / `*_sonnet.txt` filenames are kept for path
+> stability and are now provider-agnostic templates. The v3.0 prose below is
+> retained for the parts that did not change (chunking, normalisation, stats,
+> rendering).
 
 ## 1. System overview
 
@@ -127,9 +142,13 @@ Output: `data/raw/papers.jsonl` (one record per line).
 
 Exists in the codebase but is not exercised by the .exe flow. Phase 3a has an auto-promote path: if `data/filtered/relevant_papers.jsonl` does not exist, it copies `data/raw/papers.jsonl` to that location and continues.
 
-### Phase 3a — Haiku triage (`pipeline/phase3_extract.run_triage`)
+### Phase 3a — Gemini Flash triage (`pipeline/phase3_extract.run_triage`)
 
-Submits all papers as a single Anthropic Message Batch (50% discount, async, no per-call rate limits). The triage prompt asks Haiku to return a fixed JSON object per abstract: `is_long_covid_focused`, `study_design`, `sample_size`, `long_covid_definition_weeks`, `main_symptoms`, `main_biomarkers`, `risk_factors_identified`, `population_country`, `headline_finding`, `extraction_confidence`, `confidence_flags`.
+**v3.1:** triage runs on **Gemini Flash** as concurrency-bounded async calls
+(`utils.gemini_client.gather_json`, capped by `settings.GEMINI_CONCURRENCY`)
+rather than a Claude Haiku Anthropic batch. Failed abstracts are recorded to
+`triage_failures.jsonl`. The triage prompt asks the model to return a fixed
+JSON object per abstract: `is_long_covid_focused`, `study_design`, `sample_size`, `long_covid_definition_weeks`, `main_symptoms`, `main_biomarkers`, `risk_factors_identified`, `population_country`, `headline_finding`, `extraction_confidence`, `confidence_flags`.
 
 The field names `is_long_covid_focused` and `long_covid_definition_weeks` are legacy holdovers from the original Long COVID build. They semantically mean "is topic-focused" and "definition threshold weeks"; renaming is deferred because the Supabase schema references them.
 
@@ -159,9 +178,17 @@ Only papers with `is_long_covid_focused=True` are eligible.
 
 Results are written to `data/raw/fulltext_cache.jsonl` and to the `papers.full_text` column in Supabase. Coverage on the 2026-05-16 Long COVID run was 98.4% of selected papers; on the 2026-05-17 Narcolepsy run it was 100% (3 / 3).
 
-### Phase 3d — Sonnet two-step extraction with arbiter (`pipeline/phase3_extract.run_deep`)
+### Phase 3d — Cross-provider two-step extraction with arbiter (`pipeline/phase3_extract.run_deep`)
 
-**v3 (2026-05-17):** Each paper now goes through TWO independent Sonnet reviewers (different temperatures) and a third reconciliation pass. Toggle: `settings.ARBITER_ENABLED` (default `True`).
+**v3.1 (2026-06-16):** Each paper goes through TWO independent reviewers from
+different model families and a third reconciliation pass. **Reviewer A = Claude
+Sonnet 4.6** (Anthropic Batch API, temp 0.1); **Reviewer B = Gemini Pro** (async
+`gather_json`, temp 0.3, resume cache `reviewer_b_cache.jsonl`); **Arbiter =
+Claude Opus 4.8** (Anthropic Batch API, no `temperature` — deprecated on Opus).
+A and B can no longer share a single batch. When both reviewers succeed the
+arbiter reconciles; when only one succeeds, its output is used unilaterally with
+`reconciliation_triggered=false`. Toggle: `settings.ARBITER_ENABLED` (default
+`True`); when false the pipeline falls back to a single Sonnet pass.
 
 **Flow (when ARBITER_ENABLED is True):**
 
@@ -467,7 +494,7 @@ From `config/settings.py`. These mirror the analytical standard of Siciliano et 
 | `ARBITER_ENABLED` | True | **NEW v3** — When True, each paper is extracted by two Sonnet reviewers + arbiter; triples Sonnet cost. |
 | `UMLS_NORMALIZATION_ENABLED` | True | **NEW v3** — When True, one Haiku tool call per paper maps entities to UMLS CUI + MeSH heading. |
 
-Models pinned in code: `ANTHROPIC_HAIKU_MODEL = "claude-haiku-4-5-20251001"`, `ANTHROPIC_SONNET_MODEL = "claude-sonnet-4-6"`.
+Models pinned in code: `ANTHROPIC_SONNET_MODEL = "claude-sonnet-4-6"` (Reviewer A), `ANTHROPIC_OPUS_MODEL = "claude-opus-4-8"` (arbiter), `ANTHROPIC_HAIKU_MODEL = "claude-haiku-4-5-20251001"` (UMLS normalisation tool call), `GEMINI_FLASH_MODEL = "gemini-3.5-flash"` (triage), `GEMINI_PRO_MODEL = "gemini-3.1-pro"` (Reviewer B).
 
 ---
 

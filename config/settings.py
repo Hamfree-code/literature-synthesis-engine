@@ -15,10 +15,23 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str
     ANTHROPIC_HAIKU_MODEL: str = "claude-haiku-4-5-20251001"
     ANTHROPIC_SONNET_MODEL: str = "claude-sonnet-4-6"
+    ANTHROPIC_OPUS_MODEL: str = "claude-opus-4-8"   # arbiter (reconciles A+B)
+
+    # Gemini (multi-provider extraction engine). Triage filter + deep Reviewer B
+    # run on Gemini; Reviewer A stays on Claude Sonnet, arbiter on Claude Opus.
+    GEMINI_API_KEY: str = ""
+    GEMINI_FLASH_MODEL: str = "gemini-3.5-flash"    # triage filter
+    GEMINI_PRO_MODEL: str = "gemini-3.1-pro"        # deep Reviewer B
+    GEMINI_CONCURRENCY: int = 8                      # max in-flight async Gemini calls
 
     # NCBI / PubMed
     NCBI_API_KEY: str = ""
     NCBI_EMAIL: str = ""
+
+    # OpenAlex (free key required since 2026-02-13; 100 credits/day without one)
+    OPENALEX_API_KEY: str = ""
+    OPENALEX_MAILTO: str = ""
+    OPENALEX_ENABLED: bool = True
 
     # Supabase
     SUPABASE_URL: str = ""
@@ -29,6 +42,13 @@ class Settings(BaseSettings):
     MAX_DEEP_ANALYSIS: int = 500
     BATCH_SIZE: int = 100
     LOG_LEVEL: str = "INFO"
+
+    # Cost guardrails. The pipeline aborts before submitting any paid batch if
+    # the up-front estimate exceeds MAX_SPEND_USD. Set to 0 to disable the cap.
+    MAX_SPEND_USD: float = 25.0
+    # Maximum hours to poll a single Batch API job before giving up (the batch
+    # id is persisted, so a later run can resume rather than resubmit).
+    BATCH_MAX_POLL_HOURS: float = 26.0  # Anthropic batches expire at 24h
 
     # Methodology — emulating Siciliano et al. 2024 (Movement Disorders)
     QUADAS_CUTOFF: int = 13                            # Papers with QUADAS ≤ this are excluded from quantitative synthesis
@@ -54,6 +74,12 @@ class Settings(BaseSettings):
     # When true, every deep extraction is followed by one Haiku tool-call that
     # maps the extracted phenotypes / mechanisms to UMLS CUIs and MeSH headings.
     UMLS_NORMALIZATION_ENABLED: bool = True
+
+    @property
+    def supabase_enabled(self) -> bool:
+        """True only when both Supabase credentials are present. Phases that
+        persist to Supabase no-op (rather than crash) when this is False."""
+        return bool(self.SUPABASE_URL.strip()) and bool(self.SUPABASE_KEY.strip())
 
 
 settings = Settings()

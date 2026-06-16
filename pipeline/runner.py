@@ -32,16 +32,11 @@ from datetime import date
 
 import bundled_credentials
 
-
-COST_PER_TRIAGE = 0.003
-COST_PER_DEEP_SINGLE = 0.15
-COST_PER_DEEP_ARBITER = 0.45   # 3x for two reviewers + arbiter
-
 PHASES = [
-    ("ingest", "Ingestion — fetching papers from PubMed Central"),
-    ("triage", "Triage — Claude Haiku 4.5 abstract pass"),
-    ("enrich", "Enrichment — fetching full text from PMC OA"),
-    ("deep", "Deep extraction — Sonnet (two-step arbiter)"),
+    ("ingest", "Ingestion — PubMed Central + medRxiv + OpenAlex"),
+    ("triage", "Triage — Gemini Flash abstract pass"),
+    ("enrich", "Enrichment — full text from PMC + OpenAlex OA PDFs"),
+    ("deep", "Deep extraction — Sonnet + Gemini reviewers, Opus arbiter"),
     ("store", "Storage — persisting to Supabase"),
     ("analyze", "Cross-analysis — calibrated certainty + synthesis"),
     ("report", "Report — generating Markdown / HTML / PDF"),
@@ -71,6 +66,17 @@ def _add_spend(q, total: dict, amount: float) -> None:
     _emit(q, {"type": "spend", "amount": total["spend"]})
 
 
+def _count_jsonl(rel_path: str) -> int:
+    """Count non-empty lines in an app_data JSONL file (0 if absent). Used to
+    bill from ACTUAL extracted counts rather than the requested ceiling."""
+    from app_paths import app_data
+    path = app_data(rel_path)
+    if not path.exists():
+        return 0
+    with path.open(encoding="utf-8") as f:
+        return sum(1 for line in f if line.strip())
+
+
 def execute_industrial_pipeline(
     q: "multiprocessing.Queue",
     disease: str,
@@ -96,6 +102,7 @@ def execute_industrial_pipeline(
 
         from config.settings import settings
         from app_paths import APP_DATA_DIR, USER_DESKTOP
+        from utils.preflight import COST_PER_DEEP_ARBITER, COST_PER_DEEP_SINGLE, COST_PER_TRIAGE, run_preflight
 
         per_deep_cost = COST_PER_DEEP_ARBITER if settings.ARBITER_ENABLED else COST_PER_DEEP_SINGLE
         total = {"spend": 0.0}
@@ -104,8 +111,17 @@ def execute_industrial_pipeline(
         if mesh_terms:
             _log(q, f"MeSH terms filter: {mesh_terms}")
         _log(q, f"App data: {APP_DATA_DIR}")
-        est = max_papers * COST_PER_TRIAGE + max_deep * per_deep_cost + 0.50
-        _log(q, f"Estimated cost: ${est:.2f} (arbiter={'ON' if settings.ARBITER_ENABLED else 'OFF'})")
+
+        # ── Preflight: validate config + gate cost BEFORE any paid call ──────
+        report = run_preflight(max_papers, max_deep)
+        for w in report.warnings:
+            _log(q, f"Preflight warning: {w}", "warn")
+        _log(q, f"Estimated cost: ${report.estimate_usd:.2f} (arbiter={'ON' if settings.ARBITER_ENABLED else 'OFF'})")
+        if not report.ok:
+            for e in report.errors:
+                _log(q, f"Preflight error: {e}", "error")
+            _emit(q, {"type": "error", "message": "; ".join(report.errors)})
+            return
 
         import asyncio
         from pipeline import phase1_ingest, phase3_extract, phase4_store, phase5_analyze, phase6_report
@@ -118,9 +134,11 @@ def execute_industrial_pipeline(
 
         # Phase 3a triage
         _phase_start(q, 1)
-        _log(q, f"Submitting Haiku batch (up to {max_papers} papers)...")
+        _log(q, f"Triaging via Gemini Flash (up to {max_papers} papers)...")
         phase3_extract.run_triage(max_papers=max_papers)
-        _add_spend(q, total, max_papers * COST_PER_TRIAGE)
+        triaged = _count_jsonl("data/filtered/triage_results.jsonl")
+        _add_spend(q, total, triaged * COST_PER_TRIAGE)
+        _log(q, f"Triaged {triaged} papers (billed on actual count)")
         _phase_complete(q, 1)
 
         # Phase 3c enrich
@@ -128,16 +146,18 @@ def execute_industrial_pipeline(
         top_ids = phase3_extract.select_for_deep_analysis(top_n=max_deep)
         _log(q, f"Selected {len(top_ids)} papers for deep analysis")
         if top_ids:
-            _log(q, "Fetching full text from PMC Open Access (XML section-based chunking)...")
+            _log(q, "Fetching full text from PMC OA + OpenAlex open-access PDFs...")
             asyncio.run(phase1_ingest.enrich_with_fulltext(top_ids))
         _phase_complete(q, 2)
 
-        # Phase 3d deep extraction (now with arbiter)
+        # Phase 3d deep extraction (multi-provider arbiter)
         _phase_start(q, 3)
-        mode = "arbiter (A+B + reconciliation)" if settings.ARBITER_ENABLED else "single-pass"
-        _log(q, f"Submitting Sonnet deep extraction ({len(top_ids)} papers, mode={mode})...")
+        mode = "arbiter (Sonnet + Gemini → Opus)" if settings.ARBITER_ENABLED else "single-pass (Sonnet)"
+        _log(q, f"Submitting deep extraction ({len(top_ids)} papers, mode={mode})...")
         phase3_extract.run_deep(paper_ids=top_ids)
-        _add_spend(q, total, len(top_ids) * per_deep_cost)
+        deep_done = _count_jsonl("data/filtered/deep_results.jsonl")
+        _add_spend(q, total, deep_done * per_deep_cost)
+        _log(q, f"Deep-extracted {deep_done} papers (billed on actual count)")
         _phase_complete(q, 3)
 
         # Phase 4 — Persist

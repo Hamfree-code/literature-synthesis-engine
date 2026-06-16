@@ -1,12 +1,14 @@
 # Literature Synthesis Engine
 
-[![Cost](https://img.shields.io/badge/cost%2Frun-%2485--100-blue)]() [![Runtime](https://img.shields.io/badge/runtime-~1h-blue)]() [![Demo corpus](https://img.shields.io/badge/demo-4%2C666%20papers-blue)]() [![Architecture](https://img.shields.io/badge/architecture-v3.0-purple)]() [![License](https://img.shields.io/badge/license-MIT-green)]()
+[![Cost](https://img.shields.io/badge/cost%2Frun-%2485--100-blue)]() [![Runtime](https://img.shields.io/badge/runtime-~1h-blue)]() [![Demo corpus](https://img.shields.io/badge/demo-4%2C666%20papers-blue)]() [![Architecture](https://img.shields.io/badge/architecture-v3.1-purple)]() [![Engine](https://img.shields.io/badge/engine-Claude%20%2B%20Gemini-orange)]() [![License](https://img.shields.io/badge/license-MIT-green)]()
 
 An automated pipeline that ingests open-access scientific literature, performs structured methodological extraction with literal-quote provenance, and emits three calibrated reports: a research synthesis, a pharma due-diligence brief, and a non-technical executive summary.
 
 The system is **disease-agnostic**. Long COVID is the primary demonstration corpus (4,666 papers triaged in ~1 hour); Narcolepsy and Prostatic Neoplasms have been validated as secondary demonstrations on distinct therapeutic areas. Any condition queryable in PubMed Central can be analysed.
 
-**v3.0 (2026-05-17) introduces**: two-step extraction with arbiter reconciliation (eliminates anchoring bias), semantic XML section chunking (no more discussion / limitations / conflicts truncation), UMLS / MeSH normalisation (entity-level ontological linking), Cohen's Kappa validation engine (human-vs-AI agreement), [LLM] / [CALC] / [CONSENSUS] badge auditability (reader knows model inference vs deterministic computation vs arbiter consensus), conservative due-diligence rules (Phase II threshold, confidence integer 0–100, small-corpus warning), and a multiprocessing server architecture that keeps the UI responsive during heavy analysis.
+**v3.1 (2026-06) introduces** a **multi-provider extraction engine**: the two-step arbiter protocol now spans two model families — triage and deep-extraction Reviewer B run on **Google Gemini**, while Reviewer A and the arbiter run on **Anthropic Claude**. Cross-provider review makes anchoring/family bias even harder to sneak through, since the two reviewers no longer share weights. v3.1 also adds **OpenAlex** as a third ingestion source, **cost guardrails** (an up-front budget gate that aborts before any paid batch), and **resumable batches** (a crash mid-run resumes a paid job instead of re-paying for it). See [What's new in v3.1](#whats-new-in-v31).
+
+**v3.0 (2026-05-17) introduced**: two-step extraction with arbiter reconciliation (eliminates anchoring bias), semantic XML section chunking (no more discussion / limitations / conflicts truncation), UMLS / MeSH normalisation (entity-level ontological linking), Cohen's Kappa validation engine (human-vs-AI agreement), [LLM] / [CALC] / [CONSENSUS] badge auditability (reader knows model inference vs deterministic computation vs arbiter consensus), conservative due-diligence rules (Phase II threshold, confidence integer 0–100, small-corpus warning), and a multiprocessing server architecture that keeps the UI responsive during heavy analysis.
 
 ---
 
@@ -14,16 +16,30 @@ The system is **disease-agnostic**. Long COVID is the primary demonstration corp
 
 For a given medical condition, the pipeline:
 
-1. Ingests papers from PubMed Central (NCBI E-utilities) and medRxiv preprints (biorxiv.org date-interval API).
-2. Triages every abstract with Claude Haiku 4.5 into a structured JSON (design, sample size, headline finding, extraction confidence, self-flagged caveats).
+1. Ingests papers from PubMed Central (NCBI E-utilities), medRxiv preprints (biorxiv.org date-interval API), and OpenAlex (`/works` API).
+2. Triages every abstract with **Gemini Flash** into a structured JSON (design, sample size, headline finding, extraction confidence, self-flagged caveats), submitted as concurrency-bounded async calls.
 3. Selects the top N papers by `sample_size × design_weight × extraction_confidence`.
 4. Fetches PMC Open Access full text (references stripped, hard cap 120k chars).
-5. Deep-extracts each selected paper with Claude Sonnet 4.6 under a two-stage protocol (factual extraction → methodological appraisal), producing NOS, GRADE, MCID assessment, 8-axis bias audit, QUADAS-adapted scoring, Cohen-classified effect sizes, mechanistic phenotype mapping, calibrated certainty tier, and a minimum of 5 literal-quote provenance entries per paper.
+5. Deep-extracts each selected paper under a two-stage, **cross-provider** protocol: **Reviewer A = Claude Sonnet 4.6** (Anthropic Batch API) and **Reviewer B = Gemini Pro** (async) extract the paper independently, then **Claude Opus 4.8 arbitrates** and reconciles them. Each reviewer produces NOS, GRADE, MCID assessment, 8-axis bias audit, QUADAS-adapted scoring, Cohen-classified effect sizes, mechanistic phenotype mapping, calibrated certainty tier, and a minimum of 5 literal-quote provenance entries per paper.
 6. Persists everything to Supabase (papers / extractions / provenance / contradictions tables, pgvector embeddings).
 7. Cross-analyses the corpus: random-effects pooling (DerSimonian–Laird τ²), leave-one-out sensitivity, Egger's regression + trim-and-fill (for ≥10 studies per factor), moderator analysis when I² ≥ 90%, plus three Sonnet synthesis passes (research / DD / executive summary).
 8. Renders three Markdown reports → HTML → PDF, each cited in Vancouver style with CrossRef DOI resolution for citations outside the in-corpus paper set.
 
 Nothing is asserted without a traceable source. Every numeric or qualitative claim in the deep-extraction layer is grounded in a literal quote from the paper, stored in a `provenance` table keyed to the paper ID.
+
+---
+
+## What's new in v3.1
+
+| Improvement | Why it matters |
+|---|---|
+| **Multi-provider extraction engine** | Triage and deep-extraction Reviewer B now run on **Google Gemini** (`gemini-3.5-flash` / `gemini-3.1-pro`); Reviewer A stays on **Claude Sonnet 4.6** and the arbiter moves to **Claude Opus 4.8**. The two reviewers no longer share model weights, so anchoring and single-family failure modes are harder to reproduce across both. Gemini work runs as concurrency-bounded async calls (`utils/gemini_client.py`); Claude work rides the Anthropic Batch API. |
+| **OpenAlex ingestion** | A third source (`utils`/`pipeline.phase1_ingest.fetch_openalex_papers`) joins PMC and medRxiv, widening corpus coverage. Works are mapped to the standard paper schema, with abstracts rebuilt from OpenAlex's inverted index. A free `OPENALEX_API_KEY` is recommended (100 credits/day without one since 2026-02-13). |
+| **Cost guardrails (preflight)** | `utils/preflight.py` validates config + prompt files and estimates run cost **before** any paid batch is submitted; the run aborts if the estimate exceeds `settings.MAX_SPEND_USD` (default $25). No more discovering an oversized run after you've already paid for ingestion. |
+| **Resumable paid batches** | `utils/claude_client.py` persists batch ids to `data/checkpoints/batches.json`; Reviewer B keeps its own `reviewer_b_cache.jsonl`. A crash mid-run resumes the already-paid jobs instead of resubmitting them. `BATCH_MAX_POLL_HOURS` (default 26h) bounds polling. |
+| **CUI consensus canonicalisation** | Phase 5 collapses free-text symptom/phenotype synonyms onto canonical UMLS CUIs before cross-paper aggregation, so "brain fog" and "cognitive impairment" stop fragmenting the same signal. |
+| **Graceful-degradation + first test suite** | Supabase persistence no-ops cleanly when unconfigured (`settings.supabase_enabled`); triage records failures to `triage_failures.jsonl`; the project ships its first `pytest` suite (`tests/`, 58 tests) covering the stats core, guardrails, OpenAlex mapping, and the Gemini client. |
+| **Arbiter on Opus (temperature fix)** | Opus 4.8 deprecated the `temperature` parameter; the arbiter request no longer sends it (Sonnet reviewer requests still do). This had silently rejected every arbiter call on an early big run. |
 
 ---
 
@@ -43,7 +59,7 @@ Nothing is asserted without a traceable source. Every numeric or qualitative cla
 
 ---
 
-## Architecture (v3.0)
+## Architecture (v3.1)
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -54,23 +70,24 @@ Nothing is asserted without a traceable source. Every numeric or qualitative cla
 ┌──────────────────────────────────────────────────────────────────────┐
 │  Worker process — pipeline.runner.execute_industrial_pipeline()       │
 │                                                                       │
-│  Phase 1   PMC + medRxiv ingest                                       │
-│           • Haiku MeSH synonym expansion (non-LC topics)              │
+│  Phase 1   PMC + medRxiv + OpenAlex ingest                            │
+│           • Gemini MeSH synonym expansion (non-LC topics)             │
 │           • biorxiv 90-day chunks, cursor-vs-total pagination         │
+│           • OpenAlex /works (cursor-paginated, inverted-index abstr.) │
 │           • utils.xml_parser → sec-type bucketed sections             │
 │                                                                       │
-│  Phase 3a  Haiku triage (Batch API, 50% discount)                     │
+│  Phase 3a  Gemini Flash triage (async, concurrency-bounded)           │
 │                                                                       │
 │  Phase 3c  PMC OA full-text enrich (semantic chunking)                │
 │                                                                       │
-│  Phase 3d  Sonnet two-step extraction (3× cost, anchoring eliminated) │
-│           ┌──────────────────────────┐                                │
-│           │  Reviewer A   (temp 0.1) │─┐                              │
-│           ├──────────────────────────┤ │                              │
-│           │  Reviewer B   (temp 0.3) │─┼─→  Arbiter (temp 0.0)        │
-│           └──────────────────────────┘ │   • reconciliation_triggered │
-│                                        │   • llm_judgment_flags map   │
-│                                        │   • provenance re-validated  │
+│  Phase 3d  Cross-provider two-step extraction (anchoring eliminated)  │
+│           ┌─────────────────────────────────┐                         │
+│           │ Reviewer A  Claude Sonnet (0.1)  │─┐                       │
+│           ├─────────────────────────────────┤ │                       │
+│           │ Reviewer B  Gemini Pro    (0.3)  │─┼─→ Arbiter Claude Opus │
+│           └─────────────────────────────────┘ │   • reconciliation…   │
+│                                               │   • llm_judgment_flags │
+│                                               │   • provenance re-valid│
 │                                                                       │
 │  Phase 3d-bis  UMLS / MeSH normalisation (Haiku tool call per paper)  │
 │                                                                       │
@@ -104,7 +121,7 @@ The shipped artifact is a self-contained Windows `.exe` (PyInstaller bundle, ~94
 
 1. **Install Python 3.12** (the pipeline pins to `>=3.12,<3.13` because some methodology libs lag on 3.14).
 2. **Clone and install deps** with `uv sync` (or `pip install` the modules listed in `longcovid.spec` under `hiddenimports`).
-3. **Create `.env`** at the repo root with `ANTHROPIC_API_KEY`, `NCBI_API_KEY`, `NCBI_EMAIL`, `SUPABASE_URL`, `SUPABASE_KEY`. A `.env.example` is provided as a template.
+3. **Create `.env`** at the repo root with `ANTHROPIC_API_KEY` (Reviewer A + arbiter) and `GEMINI_API_KEY` (triage + Reviewer B), plus `NCBI_API_KEY`, `NCBI_EMAIL`, and the recommended-but-free `OPENALEX_API_KEY`. `SUPABASE_URL` / `SUPABASE_KEY` are optional — Supabase phases no-op cleanly when they are absent. A `.env.example` is provided as a template.
 4. **Initialise the Supabase schema** by running `config/schema.sql` followed by `config/schema_v2_migration.sql` in the Supabase SQL editor.
 5. **Run the server**: `python app_server.py`. A browser tab opens at `http://localhost:7432` with the analysis UI; enter a topic, optional MeSH filter, max papers, max deep, and start.
 
@@ -160,15 +177,16 @@ Currently implemented:
 
 - **PubMed Central** via NCBI E-utilities (`esearch.fcgi` + `efetch.fcgi`). Concurrency capped at 3 with a 0.4s per-request sleep to stay under the 10 req/s ceiling.
 - **medRxiv preprints** via the biorxiv.org `details/medrxiv/{start}/{end}/{cursor}/json` endpoint. 90-day date chunks; client-side keyword filter on title + abstract.
+- **OpenAlex** via the `/works` API (cursor-paginated). Abstracts are reconstructed from the `abstract_inverted_index`; works carrying an open-access PDF URL feed the full-text enrichment step. A free `OPENALEX_API_KEY` raises the daily quota (100 credits/day without one since 2026-02-13).
 - **CrossRef** (`api.crossref.org/works/{doi}`) for resolving citation metadata when the synthesis cites a DOI outside the ingested corpus.
 
-Not yet implemented (in the project's UPGRADE_SPEC backlog): OpenAlex, Unpaywall fulltext fallback, ClinicalTrials.gov, and a Supabase `runs` table for multi-condition tracking.
+Not yet implemented (in the project's UPGRADE_SPEC backlog): Unpaywall fulltext fallback, ClinicalTrials.gov, and a Supabase `runs` table for multi-condition tracking.
 
 ---
 
 ## Limitations
 
-- **LLM-generated structured extraction.** Every field in the deep-extraction layer is produced by Claude Sonnet, not human reviewers. The provenance layer enables literal-quote verification, but the schema mapping itself can misread nuance, over-simplify, or — rarely — hallucinate fields. The prompt forces `null` rather than guessing when confidence drops below 0.70, but this is a soft constraint enforced by the model. **v3 mitigation**: two-step extraction with arbiter reconciles disagreements between two independent reviewers; LLM-judgment flagging makes the inference / computation distinction explicit in every output.
+- **LLM-generated structured extraction.** Every field in the deep-extraction layer is produced by LLMs (Reviewer A = Claude Sonnet, Reviewer B = Gemini Pro, arbiter = Claude Opus), not human reviewers. The provenance layer enables literal-quote verification, but the schema mapping itself can misread nuance, over-simplify, or — rarely — hallucinate fields. The prompt forces `null` rather than guessing when confidence drops below 0.70, but this is a soft constraint enforced by the model. **v3 mitigation**: cross-provider two-step extraction with arbiter reconciles disagreements between two independent reviewers from different model families; LLM-judgment flagging makes the inference / computation distinction explicit in every output.
 - **QUADAS is double-LLM scored under v3** (two reviewers + arbiter), but not by trained human reviewers with arbitration. Closer to the formal standard than v2, still not the formal standard.
 - **Random-effects pooling, Egger's regression, and trim-and-fill are pure-numpy approximations** of the R `meta` / ProMeta 3 implementations. Adequate for cross-paper signal detection, not adequate for regulatory submission.
 - **UMLS CUI assignments are LLM-generated, not validated against the UMLS REST API.** Accuracy is high for common concepts and unverified for rare ones. Every CUI carries `llm_judgment=true` in the database.

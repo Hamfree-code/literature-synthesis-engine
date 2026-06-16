@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "literature-synthesis-engine"
-version = "3.0.0"
-description = "Automated, calibrated synthesis of biomedical literature with literal-quote provenance, two-step LLM extraction with arbiter reconciliation, UMLS / MeSH normalisation, and Cohen's Kappa validation."
+version = "3.1.0"
+description = "Automated, calibrated synthesis of biomedical literature with literal-quote provenance, cross-provider (Claude + Gemini) two-step LLM extraction with arbiter reconciliation, UMLS / MeSH normalisation, and Cohen's Kappa validation."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Hamsa" }]
@@ -17,9 +17,11 @@ keywords = [
     "meta-analysis",
     "claude",
     "anthropic",
+    "gemini",
     "pubmed",
     "pmc",
     "medrxiv",
+    "openalex",
     "quadas",
     "grade",
 ]
@@ -38,6 +40,7 @@ dependencies = [
     "flask>=3.0",
     "jinja2>=3.1",
     "anthropic>=0.40",
+    "google-genai>=0.3",
     "httpx[http2]>=0.27",
     "tenacity>=8.0",
     "pydantic>=2.0",
@@ -60,9 +63,9 @@ dev = ["ruff>=0.4", "pytest>=8.0"]
 literature-synthesis-engine = "app_server:main"
 
 [project.urls]
-Homepage = "https://github.com/your-user/literature-synthesis-engine"
-Documentation = "https://github.com/your-user/literature-synthesis-engine/tree/main/docs"
-Issues = "https://github.com/your-user/literature-synthesis-engine/issues"
+Homepage = "https://github.com/Hamfree-code/literature-synthesis-engine"
+Documentation = "https://github.com/Hamfree-code/literature-synthesis-engine/tree/main/docs"
+Issues = "https://github.com/Hamfree-code/literature-synthesis-engine/issues"
 
 [tool.setuptools]
 py-modules = ["app_server", "app_paths", "app_pdf", "bundled_credentials"]
