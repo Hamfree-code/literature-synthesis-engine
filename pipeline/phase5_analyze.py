@@ -739,8 +739,10 @@ def _collect_prose(obj) -> list[str]:
 
 
 def _reconcile_layers(synthesis: dict, ceiling_tier: str) -> dict:
-    """WP-9: scan synthesis prose for certainty language stronger than the
-    calibrated ceiling. Returns a structured report; phase 6 enforces it."""
+    """WP-9: the calibrated layer is authoritative. Flag (a) certainty language
+    stronger than the calibrated ceiling anywhere in the prose, and (b)
+    structural over-claiming — a non-empty findings bucket above the ceiling.
+    Returns a structured report; phase 6 enforces it."""
     order = {"speculative": 0, "possible": 1, "probable": 2, "established": 3}
     ceiling = order.get((ceiling_tier or "speculative").lower(), 0)
     offending: list[str] = []
@@ -748,10 +750,20 @@ def _reconcile_layers(synthesis: dict, ceiling_tier: str) -> dict:
         for word in rc.find_certainty_words(text):
             if word in order and order[word] > ceiling:
                 offending.append(word)
+
+    # Structural check: buckets above the ceiling must be empty.
+    overclaimed_buckets: list[str] = []
+    kfs = synthesis.get("key_findings_summary") or {}
+    bucket_tier = {"established": 3, "probable": 2, "possible_but_weak": 1, "possible": 1}
+    for bucket, rank in bucket_tier.items():
+        if rank > ceiling and kfs.get(bucket):
+            overclaimed_buckets.append(bucket)
+
     return {
         "ceiling_tier": ceiling_tier,
-        "consistent": not offending,
+        "consistent": not offending and not overclaimed_buckets,
         "offending_words": sorted(set(offending)),
+        "overclaimed_buckets": overclaimed_buckets,
     }
 
 

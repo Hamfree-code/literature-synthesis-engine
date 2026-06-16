@@ -430,7 +430,8 @@ def run() -> None:
     if settings.RECONCILIATION_STRICT and recon and not recon.get("consistent", True):
         raise ReconciliationError(
             "narrative certainty exceeds the calibrated ceiling "
-            f"({recon.get('ceiling_tier')!r}); offending language: {recon.get('offending_words')}. "
+            f"({recon.get('ceiling_tier')!r}); offending language: {recon.get('offending_words')}; "
+            f"over-claimed findings buckets: {recon.get('overclaimed_buckets')}. "
             "The narrative must consume the calibrated layer (WP-9)."
         )
 

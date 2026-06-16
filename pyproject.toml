@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "literature-synthesis-engine"
-version = "3.0.0"
+version = "3.2.0"
 description = "Automated, calibrated synthesis of biomedical literature with literal-quote provenance, two-step LLM extraction with arbiter reconciliation, UMLS / MeSH normalisation, and Cohen's Kappa validation."
 readme = "README.md"
 license = { text = "MIT" }
