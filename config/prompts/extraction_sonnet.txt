@@ -19,7 +19,7 @@ GOLDEN RULES:
     "year": int,
     "journal": string,
     "doi": string | null,
-    "design": "prospective_cohort" | "retrospective_cohort" | "rct" | "case_control" | "cross_sectional" | "case_report" | "review" | "meta_analysis" | "qualitative" | "other",
+    "design": "prospective_cohort" | "retrospective_cohort" | "rct" | "case_control" | "cross_sectional" | "case_report" | "review" | "meta_analysis" | "qualitative" | "diagnostic_accuracy" | "ml_prediction" | "administrative" | "prevalence" | "non_randomised_intervention" | "other",
     "sample_size": int | null,
     "sample_size_followup": int | null,
     "population": "adults" | "pediatrics" | "hospitalized" | "non_hospitalized" | "mixed" | "other",
@@ -31,7 +31,8 @@ GOLDEN RULES:
   "factual_extraction": {
     "long_covid_definition": string | null,
     "long_covid_definition_weeks": int | null,
-    "definition_source": "WHO_2021" | "ICD10_U099" | "study_specific" | "not_specified",
+    "definition_source": "WHO_2021" | "ICD10_U099" | "NICE" | "CDC" | "study_specific" | "not_specified",
+    "functional_impact_required": true | false | "Not Reported",
     "control_group_present": boolean | "Not Reported",
     "control_group_description": string | null,
     "primary_outcomes": [string],
@@ -176,7 +177,7 @@ CALIBRATION RULES:
 
 METHODOLOGICAL STANDARDS (Siciliano et al. 2024 emulation):
 
-1. QUADAS: Complete the quality_assessment checklist for every paper. Score 0 (absent/unclear) or 1 (present/clear) for each criterion. Sum into quadas_total (0-19). Set quadas_acceptable = true if quadas_total > 13, false otherwise. If information for a criterion is not reported in the paper, score 0 (assume absent).
+1. RISK OF BIAS — DESIGN-MATCHED (Upgrade v3.2 — WP-3): the formal risk-of-bias instrument is chosen by study design and assigned downstream (RCT→Cochrane RoB 2; cohort/case-control→Newcastle-Ottawa; non-randomised intervention→ROBINS-I; diagnostic accuracy→QUADAS-2; prevalence/cross-sectional/administrative→JBI Prevalence checklist; ML prediction→PROBAST; systematic review→AMSTAR-2/ROBIS). Complete the QUADAS quality_assessment checklist ONLY when design == "diagnostic_accuracy"; for any other design leave quadas_total as 0 and quadas_acceptable as false (it is not the applicable instrument). The 8-axis bias_audit below is a separate cross-cutting descriptive layer, NOT the formal RoB judgement. Do not report a per-paper GRADE — GRADE is computed per outcome across the body of evidence.
 
 2. EFFECT_SIZES: For every quantitative association reported in factual_extraction.risk_factors_quantified, produce an entry in effect_sizes_classified. If the metric is OR, RR, HR, or aOR, convert to Pearson's r equivalent using r = OR / sqrt(OR² + (π²/3)) and document the conversion in conversion_note. Classify magnitude using Cohen's criteria:
      r < 0.10  → "negligible"

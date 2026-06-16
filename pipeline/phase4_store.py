@@ -13,11 +13,21 @@ from utils.supabase_client import store_provenance, upsert_extraction, upsert_pa
 
 console = Console()
 
-PAPER_COLUMNS = {"id", "source", "title", "authors", "year", "journal", "abstract", "url"}
+PAPER_COLUMNS = {"id", "source", "title", "authors", "year", "journal", "abstract", "url", "canonical_id"}
 
 
 def project_paper(p: dict) -> dict:
-    return {k: v for k, v in p.items() if k in PAPER_COLUMNS}
+    row = {k: v for k, v in p.items() if k in PAPER_COLUMNS}
+    # WP-9: one canonical id per paper (PMCID preferred, DOI fallback).
+    if "canonical_id" not in row or not row.get("canonical_id"):
+        try:
+            from methodology.provenance_registry import canonical_id
+            cid = canonical_id(p)
+            if cid:
+                row["canonical_id"] = cid
+        except Exception:
+            pass
+    return row
 
 
 def map_triage_to_schema(d: dict) -> dict:
@@ -84,6 +94,17 @@ def map_deep_to_schema(d: dict) -> dict:
 
     if fx.get("long_covid_definition"):
         out["long_covid_definition"] = str(fx["long_covid_definition"])[:500]
+
+    # WP-7: canonicalised case definition (gates aggregation downstream).
+    try:
+        from methodology.case_definition import canonicalize_case_definition
+        cdf = canonicalize_case_definition(d)
+        out["case_definition_duration_weeks"] = cdf.duration_threshold_weeks
+        out["case_definition_source"] = cdf.definition_source.value
+        out["case_definition_functional_impact_required"] = cdf.functional_impact_required
+    except Exception:
+        pass
+    out["extraction_status"] = "succeeded"
     if fx.get("symptoms_prevalence"):
         out["symptoms"] = fx["symptoms_prevalence"]
     if fx.get("biomarker_findings"):

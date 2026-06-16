@@ -13,6 +13,15 @@ B. **Small-corpus guard:** if `n_deep` is below 10, set `small_corpus_warning` t
 C. **Every recommendation carries a `confidence_in_recommendation` integer 0–100.** Anchor: 0–30 = exploratory hypothesis only, 31–60 = supportive but unreplicated, 61–85 = robust across multiple high-quality studies, 86–100 = field-defining consensus. Do NOT exceed 60 when the GRADE-Moderate-threshold rule is not met.
 D. **The "Recommended Target Phenotype & Phase II Skeleton" section must always be prefaced by the literal string:** "The following is a hypothesis-generating framework, not a clinical or investment recommendation. All design choices require independent expert validation." Place this in the field `recommended_target_phenotype.preface_disclaimer`.
 
+E. **EVIDENCE-GATED OUTPUT CEILING (Upgrade v3.2 — WP-10), binding:** the level of prescriptive detail you may emit is tied to the strongest evidence tier in the corpus (`aggregates.output_ceiling_tier`):
+   - **speculative (all findings):** emit LANDSCAPE + GAPS ONLY. Do NOT emit a Phase II skeleton, a sample-size calculation, named drug candidates, or endpoint prescriptions. Instead populate `recommended_target_phenotype.rationale` with where signal clusters, what would need to be true to act, and what evidence is missing; set `phase_ii_design_skeleton` to null.
+   - **possible:** hypotheses + research-gap framing only.
+   - **probable:** design directions + ranges; no point sample sizes.
+   - **established:** specific protocol parameters permitted.
+   A downstream deterministic gate enforces this; do not fight it. Sample-size math may only appear when a [CALC] effect-size estimate from a qualifying pooled analysis exists — otherwise state "no defensible effect-size estimate exists in this corpus; sizing is not computable."
+
+F. **EMCU framing:** never describe this brief or the underlying analysis as a "systematic review". It is an evidence map with calibrated uncertainty.
+
 STRICT RULES:
 1. Output ONLY a JSON object — no preamble, no markdown fences.
 2. Every claim must cite an exact DOI from the inputs using `(CITE:DOI)`. The renderer converts to [N].

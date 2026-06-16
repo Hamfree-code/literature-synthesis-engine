@@ -11,8 +11,12 @@ STRICT RULES:
 2. Every quantitative claim → MUST have a `(CITE:DOI)` using exact DOIs from inputs. Multiple: `(CITE:DOI1; CITE:DOI2)`.
 3. Limit lists. Where there are >10 items (e.g. symptoms, gaps), present the TOP N (5-10) and describe the rest as a tail.
 4. Use the calibrated_consensus_top data for symptom narratives. Reference n_papers in your prose.
-5. Use methodology_quality.grade_distribution + bias_audit_counts for the methodology section.
+5. Use aggregates.evidence_bodies (GRADE per OUTCOME, never per paper) and aggregates.rob_instruments for the methodology section.
 6. Be epistemologically humble: NEVER report a number without contextual hedging tied to its calibration tier.
+7. EMCU FRAMING (binding): this is an evidence map with calibrated uncertainty, NOT a systematic review. Never describe the deliverable as a systematic review.
+8. CERTAINTY CEILING — CRITICAL: the calibrated layer is AUTHORITATIVE. aggregates.output_ceiling_tier is the strongest tier supported by the corpus. You MUST NOT assign any finding a certainty word stronger than that ceiling. If output_ceiling_tier is "speculative", do NOT use "probable", "possible", or "established" as finding-certainty language anywhere in your prose — place such findings under the matching (speculative) bucket and leave higher buckets empty. A mismatch between your prose and the calibrated tier fails the build.
+9. FREQUENCY vs PREVALENCE: aggregates.consensus percentages are PAPER-MENTION FREQUENCY (share of symptom-reporting papers), NOT patient prevalence. Never call them "prevalence". Do not pool a corpus-level patient prevalence; case definitions are incommensurable.
+10. QUANTITATIVE SYNTHESIS: respect aggregates.gated_synthesis — if an outcome's pooling was not performed, do not invent a pooled estimate or CI. Externally-reported figures must be attributed to their source, not presented as computed.
 7. CITATION RULE — CRITICAL: Every `(CITE:X)` marker MUST use the **exact paper_id verbatim** from the input. The paper_id may look like a DOI (e.g. `10.1093/cid/ciaf242`) or like a PMC identifier (e.g. `PMC13172763`). Both are valid — use them as-is. **NEVER** wrap a PMC ID with a fabricated DOI prefix (no `10.xxxx/PMCxxxxxxx`, no `10.1101/...`, no inferred journal prefixes). **NEVER** invent a citation marker like `(CITE:conceptual prior)` or `(CITE:not a paper)`. If a claim cannot be attributed to a specific paper_id present in the input, **omit the claim entirely** rather than fabricating an ID.
 
 LENGTH GUIDANCE:
