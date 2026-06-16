@@ -18,12 +18,21 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
-# config/outcome_dictionary/ relative to the repo root (two levels up).
-_DICT_DIR = Path(__file__).resolve().parent.parent / "config" / "outcome_dictionary"
+
+def _dict_dir() -> Path:
+    """Locate config/outcome_dictionary/ in both dev and PyInstaller bundles
+    without importing app_paths (keeps these engines side-effect free)."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS) / "config" / "outcome_dictionary"
+    return Path(__file__).resolve().parent.parent / "config" / "outcome_dictionary"
+
+
+_DICT_DIR = _dict_dir()
 
 
 def _norm_label(label: str) -> str:
