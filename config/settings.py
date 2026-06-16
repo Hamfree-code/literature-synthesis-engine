@@ -55,5 +55,20 @@ class Settings(BaseSettings):
     # maps the extracted phenotypes / mechanisms to UMLS CUIs and MeSH headings.
     UMLS_NORMALIZATION_ENABLED: bool = True
 
+    # ── UPGRADE v3.2 — Methodological Hardening & Provenance Integrity ──────
+    # WP-1: on a JSON parse failure, hand the malformed string to a cheap model
+    # (Haiku) once, asking for valid JSON conforming to the schema. Accepted
+    # only if it validates. Eliminates the silent technical filter on data-rich
+    # papers.
+    EXTRACTION_REPAIR_ENABLED: bool = True
+    # WP-1: ceiling for deep-extraction output, sized to the largest observed
+    # payload + headroom so data-rich papers no longer truncate.
+    DEEP_EXTRACTION_MAX_TOKENS: int = 16384
+    # WP-5/6: which per-condition outcome dictionary to normalise against.
+    OUTCOME_DICTIONARY_CONDITION: str = "long_covid"
+    # WP-0/§1: fail the report build if a template affirmatively self-describes
+    # as a "systematic review" (EMCU framing).
+    EMCU_LINT_ENABLED: bool = True
+
 
 settings = Settings()

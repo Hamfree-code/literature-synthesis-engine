@@ -19,6 +19,13 @@ from pathlib import Path
 from rich.console import Console
 
 from config.settings import settings
+from methodology.extraction_schema import (
+    FailureReason,
+    classify_parse_failure,
+    parse_or_repair,
+    validate_extraction,
+)
+from methodology import flow_record as flow
 from utils.checkpointing import Checkpoint
 from utils.claude_client import parse_json_response, poll_batch, sanitize_custom_id, submit_batch
 
@@ -77,7 +84,9 @@ def build_reviewer_request(paper: dict, *, temperature: float, suffix: str) -> d
         "custom_id": reviewer_custom_id(paper["id"], suffix),
         "params": {
             "model": settings.ANTHROPIC_SONNET_MODEL,
-            "max_tokens": 8192,
+            # WP-1: ceiling sized to the largest observed payload + headroom so
+            # data-rich papers no longer truncate mid-object.
+            "max_tokens": settings.DEEP_EXTRACTION_MAX_TOKENS,
             "temperature": temperature,
             "messages": [{
                 "role": "user",
@@ -109,11 +118,31 @@ def build_arbiter_request(paper: dict, reviewer_a: dict, reviewer_b: dict) -> di
         "custom_id": reviewer_custom_id(paper["id"], "arb"),
         "params": {
             "model": settings.ANTHROPIC_SONNET_MODEL,
-            "max_tokens": 8192,
+            "max_tokens": settings.DEEP_EXTRACTION_MAX_TOKENS,
             "temperature": 0.0,
             "messages": [{"role": "user", "content": prompt}],
         },
     }
+
+
+def _repair_fn(raw: str) -> str:
+    """WP-1 repair pass: hand a malformed extraction string to Haiku and ask for
+    valid JSON conforming to the schema. Returns the model's text; the caller
+    accepts it only if it validates."""
+    from utils.claude_client import client
+
+    schema_hint = _topic_substitute(EXTRACT_PROMPT).split(_FULLTEXT_SENTINEL)[0]
+    instruction = (
+        "Return ONLY valid JSON conforming to this schema; do not add commentary, "
+        "markdown, or preamble. Repair the malformed JSON that follows the schema.\n\n"
+        f"SCHEMA:\n{schema_hint}\n\nMALFORMED JSON TO REPAIR:\n{raw}"
+    )
+    msg = client.messages.create(
+        model=settings.ANTHROPIC_HAIKU_MODEL,
+        max_tokens=settings.DEEP_EXTRACTION_MAX_TOKENS,
+        messages=[{"role": "user", "content": instruction}],
+    )
+    return msg.content[0].text if msg.content else ""
 
 
 def run_triage(max_papers: int | None = None) -> None:
@@ -202,8 +231,17 @@ def _load_deep_papers(paper_ids: list[str]) -> list[dict]:
     return [papers_by_id[pid] for pid in paper_ids if pid in papers_by_id]
 
 
-def _parse_batch_results(results, cid_to_pid: dict[str, str]) -> tuple[dict[str, dict], list[dict]]:
-    """Parse a list of batch results into (parsed_by_paper_id, failures)."""
+def _parse_batch_results(
+    results, cid_to_pid: dict[str, str], *, repair: bool = False
+) -> tuple[dict[str, dict], list[dict]]:
+    """Parse a list of batch results into (parsed_by_paper_id, failures).
+
+    WP-1: failures carry a TYPED reason (truncation | schema_violation |
+    api_error | timeout) so no paper is dropped silently. When ``repair`` is
+    set (the final/canonical extraction), a JSON parse failure gets one Haiku
+    repair attempt — accepted only if it validates.
+    """
+    repair_fn = _repair_fn if (repair and settings.EXTRACTION_REPAIR_ENABLED) else None
     parsed_by_pid: dict[str, dict] = {}
     failures: list[dict] = []
     for r in results:
@@ -211,19 +249,65 @@ def _parse_batch_results(results, cid_to_pid: dict[str, str]) -> tuple[dict[str,
         if r.result.type != "succeeded":
             err = getattr(r.result, "error", None)
             err_msg = getattr(err, "message", str(err)) if err else f"result.type={r.result.type}"
-            failures.append({"paper_id": paper_id, "reason": "api_error", "detail": err_msg[:300]})
+            reason = FailureReason.TIMEOUT if r.result.type == "timeout" else FailureReason.API_ERROR
+            failures.append({"paper_id": paper_id, "reason": reason.value, "detail": err_msg[:300]})
             continue
         raw_text = r.result.message.content[0].text if r.result.message.content else ""
-        parsed = parse_json_response(raw_text)
-        if not parsed:
+        obj, fail_reason = parse_or_repair(raw_text, repair_fn=repair_fn)
+        if obj is None:
             failures.append({
                 "paper_id": paper_id,
-                "reason": "json_parse_failed",
+                "reason": (fail_reason or classify_parse_failure(raw_text)).value,
                 "detail": f"raw len={len(raw_text)} prefix={raw_text[:200]!r}",
             })
             continue
-        parsed_by_pid[paper_id] = parsed
+        parsed_by_pid[paper_id] = obj
     return parsed_by_pid, failures
+
+
+def _finalize_validation(
+    extractions_by_pid: dict[str, dict]
+) -> tuple[dict[str, dict], list[dict]]:
+    """Validate canonical extractions against the schema before they reach the
+    DB. Reject-with-reason; never drop silently (WP-1.1)."""
+    valid: dict[str, dict] = {}
+    failures: list[dict] = []
+    for pid, obj in extractions_by_pid.items():
+        outcome = validate_extraction(obj)
+        if outcome.ok:
+            valid[pid] = obj
+        else:
+            failures.append({
+                "paper_id": pid,
+                "reason": (outcome.reason or FailureReason.SCHEMA_VIOLATION).value,
+                "detail": "; ".join(outcome.errors)[:300],
+            })
+    return valid, failures
+
+
+def _write_flow_record(intended_ids: list[str], succeeded_ids: set[str], failures: list[dict]) -> None:
+    """Emit the PRISMA-style flow record (WP-1.4) as structured JSON so no paper
+    vanishes and n_intended / n_extracted / n_failed / n_substituted are
+    explicit and reproducible."""
+    failure_reasons = {f["paper_id"]: f.get("reason", FailureReason.SCHEMA_VIOLATION.value) for f in failures}
+    selection = flow.reconcile_selection(
+        intended_ids, succeeded_ids=succeeded_ids, replacement_pool=[], failure_reasons=failure_reasons,
+    )
+    by_reason: dict[str, int] = {}
+    for f in failures:
+        by_reason[f.get("reason", "unknown")] = by_reason.get(f.get("reason", "unknown"), 0) + 1
+    record = flow.build_flow_record(
+        identified=0, triaged=0, eligible=len(intended_ids),
+        selection=selection, failures_by_reason=by_reason,
+    )
+    payload = {"flow": record.to_dict(), "selection": selection.to_dict(), "diagram": record.as_text_diagram()}
+    out = app_data("data/filtered/flow_record.json")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    console.print(
+        f"Flow record: intended={selection.n_intended} extracted={selection.n_extracted} "
+        f"failed={selection.n_failed} substituted={selection.n_substituted}"
+    )
 
 
 def _write_outputs(extractions_by_pid: dict[str, dict], failures: list[dict], n_requested: int) -> None:
@@ -262,7 +346,10 @@ def _run_single_pass(deep_papers: list[dict]) -> None:
     console.print(f"  Submitting single-pass batch ({len(requests)} requests)...")
     batch_id = submit_batch(requests)
     results = poll_batch(batch_id)
-    parsed, failures = _parse_batch_results(results, cid_to_pid)
+    parsed, failures = _parse_batch_results(results, cid_to_pid, repair=True)
+    parsed, vfailures = _finalize_validation(parsed)
+    failures += vfailures
+    _write_flow_record([p["id"] for p in deep_papers], set(parsed.keys()), failures)
     _write_outputs(parsed, failures, len(deep_papers))
 
 
@@ -319,7 +406,7 @@ def _run_arbiter_pass(deep_papers: list[dict]) -> None:
         console.print(f"  Arbiter pass: submitting {len(arbiter_requests)} reconciliations...")
         arb_batch_id = submit_batch(arbiter_requests)
         arb_results = poll_batch(arb_batch_id)
-        parsed_arb, fail_arb = _parse_batch_results(arb_results, cid_arb_to_pid)
+        parsed_arb, fail_arb = _parse_batch_results(arb_results, cid_arb_to_pid, repair=True)
     else:
         parsed_arb = {}
         fail_arb = []
@@ -342,6 +429,12 @@ def _run_arbiter_pass(deep_papers: list[dict]) -> None:
             combined_failures.append({**f, "reason": f"reviewer_a_{f['reason']}_AND_b_failed"})
     for f in fail_arb:
         combined_failures.append({**f, "reason": f"arbiter_{f['reason']}"})
+
+    # WP-1: validate canonical extractions before they reach the DB, then emit
+    # the PRISMA flow record so no paper vanishes silently.
+    final_extractions, validation_failures = _finalize_validation(final_extractions)
+    combined_failures += validation_failures
+    _write_flow_record([p["id"] for p in deep_papers], set(final_extractions.keys()), combined_failures)
 
     _write_outputs(final_extractions, combined_failures, len(deep_papers))
 
