@@ -68,8 +68,14 @@ Issues = "https://github.com/your-user/literature-synthesis-engine/issues"
 py-modules = ["app_server", "app_paths", "app_pdf", "bundled_credentials"]
 
 [tool.setuptools.packages.find]
-include = ["config*", "pipeline*", "utils*", "templates*"]
+include = ["config*", "pipeline*", "utils*", "templates*", "methodology*"]
 
 [tool.ruff]
 line-length = 110
 target-version = "py312"
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
