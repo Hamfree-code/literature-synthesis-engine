@@ -182,7 +182,11 @@ async def fetch_pmc_fulltext(pmc_id: str, client: httpx.AsyncClient) -> str | No
     if not structured:
         return None
     from utils.xml_parser import sections_to_compact_text
+    from methodology.provenance_registry import strip_references_section
     compact = sections_to_compact_text(structured)
+    # WP-9.3: strip any residual references-section *content* (not just the XML
+    # <ref-list>) so a trailing bibliography cannot bleed into extraction.
+    compact = strip_references_section(compact) if compact else compact
     return compact or None
 
 

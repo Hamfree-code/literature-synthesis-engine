@@ -72,3 +72,29 @@ def test_max_evidence_tier_speculative_when_all_speculative():
 def test_max_evidence_tier_picks_strongest():
     cc = {"fatigue": {"consensus_certainty": "speculative"}, "pain": {"consensus_certainty": "possible"}}
     assert it.max_evidence_tier(cc) == "possible"
+
+
+def test_rct_count():
+    deep = [_ext("PMC1", "rct", ["fatigue"]), _ext("PMC2", "cross_sectional", ["fatigue"])]
+    assert it.rct_count(deep) == 1
+
+
+def test_gated_synthesis_refuses_across_case_definitions():
+    # two papers, same outcome, but different duration thresholds → not poolable
+    a = _ext("PMC1", "cross_sectional", ["fatigue"])
+    b = _ext("PMC2", "cohort", ["fatigue"])
+    b["factual_extraction"]["long_covid_definition_weeks"] = 4  # different stratum
+    res = it.gated_synthesis_decisions([a, b])
+    fatigue = [d for d in res["decisions"] if d["outcome"] == "fatigue"][0]
+    assert fatigue["pooling_performed"] is False
+    assert "no quantitative pooling was performed" in fatigue["pooling_note"]
+    assert res["any_outcome_qualified"] is False
+    assert "No outcome" in res["siciliano_claim"]
+
+
+def test_gated_synthesis_egger_refused_small_n():
+    deep = [_ext(f"PMC{i}", "cross_sectional", ["fatigue"]) for i in range(3)]
+    res = it.gated_synthesis_decisions(deep)
+    fatigue = [d for d in res["decisions"] if d["outcome"] == "fatigue"][0]
+    assert fatigue["egger_performed"] is False
+    assert "insufficient studies" in fatigue["egger_note"]

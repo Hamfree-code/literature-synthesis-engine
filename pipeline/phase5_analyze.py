@@ -13,6 +13,9 @@ import numpy as np
 from rich.console import Console
 
 from config.settings import settings
+from methodology import integration as v32
+from methodology import output_ceiling as oc
+from methodology import reconciliation as rc
 from utils.checkpointing import Checkpoint
 
 console = Console()
@@ -721,6 +724,37 @@ def call_executive_summary(aggregates: dict, deep_path: Path) -> dict:
         return {"_parse_failed": True}
 
 
+def _collect_prose(obj) -> list[str]:
+    """Recursively collect all string values from a synthesis structure."""
+    out: list[str] = []
+    if isinstance(obj, str):
+        out.append(obj)
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            out.extend(_collect_prose(v))
+    elif isinstance(obj, list):
+        for v in obj:
+            out.extend(_collect_prose(v))
+    return out
+
+
+def _reconcile_layers(synthesis: dict, ceiling_tier: str) -> dict:
+    """WP-9: scan synthesis prose for certainty language stronger than the
+    calibrated ceiling. Returns a structured report; phase 6 enforces it."""
+    order = {"speculative": 0, "possible": 1, "probable": 2, "established": 3}
+    ceiling = order.get((ceiling_tier or "speculative").lower(), 0)
+    offending: list[str] = []
+    for text in _collect_prose(synthesis):
+        for word in rc.find_certainty_words(text):
+            if word in order and order[word] > ceiling:
+                offending.append(word)
+    return {
+        "ceiling_tier": ceiling_tier,
+        "consistent": not offending,
+        "offending_words": sorted(set(offending)),
+    }
+
+
 def run() -> None:
     checkpoint = Checkpoint("phase5_analyze")
     if checkpoint.is_complete():
@@ -763,6 +797,29 @@ def run() -> None:
         calibrated_consensus = propagate_uncertainty(deep_extractions)
         aggregates["calibrated_consensus"] = calibrated_consensus
         aggregates["findings_by_certainty"] = build_uncertainty_report_section(calibrated_consensus)
+
+        # ── UPGRADE v3.2 — authoritative methodology layer ────────────────
+        # Computed BEFORE synthesis so the prompts consume the calibrated /
+        # outcome-level truth instead of re-deriving it.
+        from utils.run_context import topic_lower
+        condition = topic_lower()
+        norm = v32.normalisation_review(deep_extractions, condition)
+        evidence_bodies = v32.build_evidence_bodies(deep_extractions, condition)
+        ceiling_tier = v32.max_evidence_tier(calibrated_consensus, evidence_bodies)
+        aggregates["evidence_bodies"] = evidence_bodies                     # WP-2 GRADE per outcome
+        aggregates["normalisation_review"] = norm["normalisation_review"]    # WP-5/6 unmapped log
+        aggregates["outcome_dictionary_version"] = norm["dictionary_version"]
+        aggregates["rob_instruments"] = v32.rob_assignments(deep_extractions)  # WP-3 design-matched
+        aggregates["rct_count"] = v32.rct_count(deep_extractions)            # WP-§1.3
+        aggregates["gated_synthesis"] = v32.gated_synthesis_decisions(deep_extractions, condition)  # WP-6
+        aggregates["output_ceiling_tier"] = ceiling_tier                     # WP-10
+        # WP-1 PRISMA flow record (written by phase 3), surfaced in the report.
+        flow_path = app_data("data/filtered/flow_record.json")
+        if flow_path.exists():
+            try:
+                aggregates["flow_record"] = json.loads(flow_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                pass
 
         # ── Methodological synthesis (Siciliano 2024 emulation) ──────────
         quadas_rows = collect_quadas_scores(deep_path)
@@ -830,6 +887,17 @@ def run() -> None:
     synthesis = call_synthesizer(aggregates, deep_path, triage_path) if deep_path.exists() else {}
     due_diligence = call_due_diligence(aggregates, deep_path) if deep_path.exists() else {}
     executive_summary = call_executive_summary(aggregates, deep_path) if deep_path.exists() else {}
+
+    # ── UPGRADE v3.2 — post-synthesis gates ───────────────────────────────
+    ceiling_tier = aggregates.get("output_ceiling_tier", "speculative")
+    if due_diligence:
+        # WP-10: tie prescriptive detail to evidence strength. With a
+        # speculative-max corpus this strips the Phase II skeleton, sample-size
+        # math and named drug candidates, leaving landscape + gaps only.
+        due_diligence = oc.gate_due_diligence(due_diligence, ceiling_tier, has_calc_effect_size=False)
+    # WP-9: reconcile narrative certainty against the calibrated ceiling. The
+    # calibrated layer is authoritative; prose may not exceed it.
+    aggregates["reconciliation_report"] = _reconcile_layers(synthesis, ceiling_tier)
 
     analysis = {
         "aggregates": aggregates,

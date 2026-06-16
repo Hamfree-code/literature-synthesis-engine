@@ -175,14 +175,33 @@ def run() -> None:
             count += 1
         console.print(f"Upserted {count} triage extractions")
 
+    # WP-9.5: load cached full text so every literal quote can be verified
+    # against its source; quotes that no longer substring-match are pulled.
+    fulltext_by_pid: dict[str, str] = {}
+    ft_cache = app_data("data/raw/fulltext_cache.jsonl")
+    if ft_cache.exists():
+        for line in ft_cache.open(encoding="utf-8"):
+            try:
+                rec = json.loads(line)
+                fulltext_by_pid[rec["paper_id"]] = rec.get("full_text") or ""
+            except (json.JSONDecodeError, KeyError):
+                pass
+
     deep_path = app_data("data/filtered/deep_results.jsonl")
     if deep_path.exists():
+        from methodology.provenance_registry import filter_quotes
         count = 0
         prov_total = 0
+        drift_total = 0
         for line in deep_path.open(encoding="utf-8"):
             data = json.loads(line)
             paper_id = data.pop("paper_id")
             provenance_entries = data.pop("provenance", None) or []
+            full_text = fulltext_by_pid.get(paper_id)
+            if provenance_entries and full_text:
+                verified, drifted = filter_quotes(provenance_entries, full_text)
+                provenance_entries = verified
+                drift_total += len(drifted)
             mapped = map_deep_to_schema(data)
             upsert_extraction(paper_id, "fulltext", mapped)
             if provenance_entries:
@@ -192,7 +211,10 @@ def run() -> None:
                 except Exception as e:
                     console.print(f"[yellow]Provenance store failed for {paper_id}: {e}[/]")
             count += 1
-        console.print(f"Upserted {count} deep extractions, {prov_total} provenance entries")
+        console.print(
+            f"Upserted {count} deep extractions, {prov_total} provenance entries "
+            f"({drift_total} quote-drift entries pulled)"
+        )
 
     # v3: persist UMLS-normalised entities to extracted_phenotypes
     norm_path = app_data("data/filtered/normalized_entities.jsonl")

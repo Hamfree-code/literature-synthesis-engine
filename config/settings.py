@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     # WP-0/§1: fail the report build if a template affirmatively self-describes
     # as a "systematic review" (EMCU framing).
     EMCU_LINT_ENABLED: bool = True
+    # WP-9: fail the report build if narrative certainty language exceeds the
+    # calibrated ceiling (prose/calibrated mismatch). The calibrated layer is
+    # authoritative; this enforces it.
+    RECONCILIATION_STRICT: bool = True
 
 
 settings = Settings()

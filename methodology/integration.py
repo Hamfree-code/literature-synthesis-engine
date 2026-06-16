@@ -15,10 +15,11 @@ from __future__ import annotations
 from collections import defaultdict
 
 from methodology import grade_engine as ge
+from methodology import synthesis_gating as sg
 from methodology.case_definition import canonicalize_case_definition
 from methodology.extraction_schema import FailureReason, parse_or_repair, validate_extraction
 from methodology.outcome_dictionary import load_dictionary, normalize_outcomes
-from methodology.rob_tools import classify_design, rob_assignment
+from methodology.rob_tools import StudyDesign, classify_design, rob_assignment
 
 # Bias-audit boolean flags emitted by the extraction prompt (WP-3 cross-cutting
 # descriptive layer) — used to derive a deterministic risk_of_bias downgrade.
@@ -154,6 +155,59 @@ def build_evidence_bodies(
         )
         bodies.append(body.to_dict())
     return bodies
+
+
+def _group_by_outcome(deep_extractions: list[dict], condition: str) -> dict[str, list[dict]]:
+    dictionary = load_dictionary(condition)
+    by_outcome: dict[str, list[dict]] = defaultdict(list)
+    for ext in deep_extractions:
+        seen: set[str] = set()
+        for label in _reported_outcome_labels(ext):
+            canonical = dictionary.normalize(label)
+            if canonical and canonical not in seen:
+                by_outcome[canonical].append(ext)
+                seen.add(canonical)
+    return by_outcome
+
+
+def rct_count(deep_extractions: list[dict]) -> int:
+    """Number of RCTs in the corpus (WP-§1.3: methods must state the RCT count;
+    zero RCTs → intervention-efficacy questions are out of scope)."""
+    return sum(
+        1 for e in deep_extractions
+        if classify_design((e.get("study_metadata") or {}).get("design")) is StudyDesign.RCT
+    )
+
+
+def gated_synthesis_decisions(deep_extractions: list[dict], condition: str = "long_covid") -> dict:
+    """Per-outcome quantitative-synthesis gate (WP-6): for each canonical
+    outcome, record whether pooling / Egger preconditions hold and the honest
+    "no pooling performed because …" note when they do not. Symptom outcomes are
+    proportions; the gate therefore depends on case-definition commensurability."""
+    by_outcome = _group_by_outcome(deep_extractions, condition)
+    decisions: list[dict] = []
+    any_qualified = False
+    for outcome, exts in sorted(by_outcome.items()):
+        case_defs = [canonicalize_case_definition(e) for e in exts]
+        outcomes = [outcome] * len(exts)
+        metrics = ["prevalence"] * len(exts)
+        pool = sg.random_effects_pool(outcomes, metrics, case_defs)
+        egger = sg.egger_test(len(exts))
+        decisions.append({
+            "outcome": outcome,
+            "n_studies": len(exts),
+            "pooling_performed": pool.performed,
+            "pooling_note": pool.reason,
+            "pooling_provenance_tag": pool.provenance_tag,
+            "egger_performed": egger.performed,
+            "egger_note": egger.reason,
+        })
+        any_qualified = any_qualified or pool.performed
+    return {
+        "decisions": decisions,
+        "any_outcome_qualified": any_qualified,
+        "siciliano_claim": sg.siciliano_claim(any_qualified),
+    }
 
 
 def max_evidence_tier(calibrated_consensus: dict | None, evidence_bodies: list[dict] | None = None) -> str:

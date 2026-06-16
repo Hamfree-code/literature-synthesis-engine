@@ -13,6 +13,9 @@ import markdown as md_lib
 from jinja2 import Environment, FileSystemLoader
 from rich.console import Console
 
+from config.settings import settings
+from methodology import emcu
+from methodology.reconciliation import ReconciliationError
 from utils.checkpointing import Checkpoint
 
 console = Console()
@@ -242,13 +245,15 @@ def _make_env(citer: "CitationManager") -> Environment:
     return env
 
 
-def build_markdown(analysis: dict, papers_by_id: dict[str, dict]) -> tuple[str, dict]:
+def build_markdown(analysis: dict, papers_by_id: dict[str, dict], citer: "CitationManager | None" = None) -> tuple[str, dict]:
     synthesis = analysis.get("synthesis") or {}
     aggregates = analysis.get("aggregates") or {}
     n_papers = aggregates.get("n_papers") or analysis.get("meta", {}).get("n_papers", 0)
     n_deep = sum(1 for _ in (app_data("data/filtered/deep_results.jsonl").open(encoding="utf-8") if app_data("data/filtered/deep_results.jsonl").exists() else []))
 
-    citer = CitationManager(papers_by_id)
+    # WP-9: numbering is assigned once per run and SHARED across documents so
+    # report [1] == due-diligence [1] for the same paper.
+    citer = citer or CitationManager(papers_by_id)
     env = _make_env(citer)
 
     from utils.run_context import topic_title
@@ -274,13 +279,13 @@ def build_markdown(analysis: dict, papers_by_id: dict[str, dict]) -> tuple[str, 
     }
 
 
-def build_due_diligence_markdown(analysis: dict, papers_by_id: dict[str, dict]) -> tuple[str, dict]:
+def build_due_diligence_markdown(analysis: dict, papers_by_id: dict[str, dict], citer: "CitationManager | None" = None) -> tuple[str, dict]:
     dd = analysis.get("due_diligence") or {}
     aggregates = analysis.get("aggregates") or {}
     n_papers = aggregates.get("n_papers") or analysis.get("meta", {}).get("n_papers", 0)
     n_deep = sum(1 for _ in (app_data("data/filtered/deep_results.jsonl").open(encoding="utf-8") if app_data("data/filtered/deep_results.jsonl").exists() else []))
 
-    citer = CitationManager(papers_by_id)
+    citer = citer or CitationManager(papers_by_id)
     env = _make_env(citer)
 
     from utils.run_context import topic_title
@@ -408,6 +413,23 @@ def run() -> None:
 
     analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
 
+    # WP-0/§1.2 — EMCU build gate: no template may affirmatively self-describe
+    # as a "systematic review".
+    if settings.EMCU_LINT_ENABLED:
+        template_files = list(resource("templates").glob("*.j2"))
+        emcu.assert_clean(template_files)
+        console.print(f"[dim]EMCU lint: {len(template_files)} templates clean[/]")
+
+    # WP-9 — reconciliation gate: prose certainty may not exceed the calibrated
+    # ceiling. The calibrated layer is authoritative.
+    recon = (analysis.get("aggregates") or {}).get("reconciliation_report") or {}
+    if settings.RECONCILIATION_STRICT and recon and not recon.get("consistent", True):
+        raise ReconciliationError(
+            "narrative certainty exceeds the calibrated ceiling "
+            f"({recon.get('ceiling_tier')!r}); offending language: {recon.get('offending_words')}. "
+            "The narrative must consume the calibrated layer (WP-9)."
+        )
+
     papers_path = app_data("data/raw/papers.jsonl")
     papers_by_id: dict[str, dict] = {}
     if papers_path.exists():
@@ -445,11 +467,15 @@ def run() -> None:
     from utils.run_context import topic_slug
     slug = topic_slug()
 
-    md_body, stats = build_markdown(analysis, papers_by_id)
+    # WP-9: one citation registry shared across the report and the due-diligence
+    # brief so identical papers carry identical numbers in both documents.
+    shared_citer = CitationManager(papers_by_id)
+
+    md_body, stats = build_markdown(analysis, papers_by_id, citer=shared_citer)
     write_one(f"research_{slug}", md_body, stats)
 
     if analysis.get("due_diligence"):
-        dd_md, dd_stats = build_due_diligence_markdown(analysis, papers_by_id)
+        dd_md, dd_stats = build_due_diligence_markdown(analysis, papers_by_id, citer=shared_citer)
         write_one(f"research_{slug}_due_diligence", dd_md, dd_stats)
 
     # Executive summary — always emit, even if Sonnet failed. The template degrades gracefully.
